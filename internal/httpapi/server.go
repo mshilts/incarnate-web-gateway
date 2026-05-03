@@ -3,11 +3,13 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -25,6 +27,7 @@ type Server struct {
 	sessions  *session.Store
 	authLimit *ratelimit.Limiter
 	audit     audit.Logger
+	proxies   []netip.Prefix
 }
 
 func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
@@ -35,6 +38,10 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	proxies, err := parseProxyCIDRs(cfg.TrustedProxyCIDRs)
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
 		cfg:       cfg,
 		origins:   origins,
@@ -42,6 +49,7 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 		sessions:  session.NewStore(cfg.SessionTTL, cfg.SessionIdleTTL),
 		authLimit: ratelimit.New(20, time.Minute),
 		audit:     audit.New(logger),
+		proxies:   proxies,
 	}, nil
 }
 
@@ -206,7 +214,7 @@ func (s *Server) requireOrigin(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (s *Server) requireRateLimit(w http.ResponseWriter, r *http.Request, action string) bool {
-	key := action + ":" + clientIP(r)
+	key := action + ":" + s.clientIP(r)
 	if !s.authLimit.Allow(key) {
 		writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return false
@@ -219,20 +227,24 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
-			return false
-		}
-		writeError(w, http.StatusBadRequest, "invalid json")
+		writeJSONDecodeError(w, err)
 		return false
 	}
-	var extra any
+	var extra json.RawMessage
 	if err := decoder.Decode(&extra); err != io.EOF {
-		writeError(w, http.StatusBadRequest, "invalid json")
+		writeJSONDecodeError(w, err)
 		return false
 	}
 	return true
+}
+
+func writeJSONDecodeError(w http.ResponseWriter, err error) {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		return
+	}
+	writeError(w, http.StatusBadRequest, "invalid json")
 }
 
 func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
@@ -251,36 +263,75 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": message})
 }
 
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+func (s *Server) clientIP(r *http.Request) string {
+	peerIP := remoteIP(r.RemoteAddr)
+	if s.trustsProxy(peerIP) {
+		if headerIP := singleClientIPHeader(r.Header, s.cfg.ClientIPHeader); headerIP != "" {
+			return headerIP
+		}
+	}
+	return peerIP
+}
+
+func (s *Server) trustsProxy(ip string) bool {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	for _, proxy := range s.proxies {
+		if proxy.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func remoteIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
 	if err == nil {
-		if ip := forwardedClientIP(r, host); ip != "" {
-			return ip
+		if ip, err := netip.ParseAddr(host); err == nil {
+			return ip.String()
 		}
 		return host
 	}
-	if strings.TrimSpace(r.RemoteAddr) == "" {
+	trimmed := strings.TrimSpace(remoteAddr)
+	if trimmed == "" {
 		return "unknown"
 	}
-	return r.RemoteAddr
+	if ip, err := netip.ParseAddr(trimmed); err == nil {
+		return ip.String()
+	}
+	return trimmed
 }
 
-func forwardedClientIP(r *http.Request, remoteHost string) string {
-	remoteIP := net.ParseIP(remoteHost)
-	if remoteIP == nil || !remoteIP.IsLoopback() {
+func singleHeaderIP(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.Contains(value, ",") {
 		return ""
 	}
-	values := r.Header.Values("CF-Connecting-IP")
-	if len(values) != 1 {
-		return ""
-	}
-	value := strings.TrimSpace(values[0])
-	if strings.Contains(value, ",") {
-		return ""
-	}
-	ip := net.ParseIP(value)
-	if ip == nil {
+	ip, err := netip.ParseAddr(value)
+	if err != nil {
 		return ""
 	}
 	return ip.String()
+}
+
+func singleClientIPHeader(header http.Header, name string) string {
+	values := header.Values(name)
+	if len(values) != 1 {
+		return ""
+	}
+	return singleHeaderIP(values[0])
+}
+
+func parseProxyCIDRs(cidrs []string) ([]netip.Prefix, error) {
+	proxies := make([]netip.Prefix, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		proxy, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted proxy cidr %q: %w", cidr, err)
+		}
+		proxies = append(proxies, proxy)
+	}
+	return proxies, nil
 }

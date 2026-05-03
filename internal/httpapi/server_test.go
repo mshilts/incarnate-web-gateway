@@ -27,6 +27,8 @@ func testServer(t *testing.T) *Server {
 		MaxBodyBytes:      1024,
 		MaxFrameBytes:     1024,
 		MaxHeaderBytes:    1024,
+		ClientIPHeader:    config.DefaultClientIPHeader,
+		TrustedProxyCIDRs: config.DefaultTrustedProxyCIDRs(),
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -103,6 +105,17 @@ func TestTrailingJSONRejected(t *testing.T) {
 	}
 }
 
+func TestUnknownJSONFieldRejected(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/login/options", strings.NewReader(`{"account":"matt","admin":true}`))
+	req.Header.Set("Origin", config.DefaultPublicOrigin)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	testServer(t).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", rec.Code)
+	}
+}
+
 func TestOversizedJSONRejectedWith413(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/login/options", strings.NewReader(`{"account":"`+strings.Repeat("a", 2048)+`"}`))
 	req.Header.Set("Origin", config.DefaultPublicOrigin)
@@ -131,16 +144,47 @@ func TestWebSocketRejectsUnknownLengthBody(t *testing.T) {
 	}
 }
 
-func TestClientIPUsesCloudflareHeaderOnlyFromLoopback(t *testing.T) {
+func TestClientIPTrustsConfiguredProxyHeader(t *testing.T) {
+	server := testServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/login/options", nil)
-	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("CF-Connecting-IP", "203.0.113.10")
-	if got := clientIP(req); got != "203.0.113.10" {
-		t.Fatalf("clientIP from trusted loopback proxy = %q", got)
-	}
+	req.RemoteAddr = "127.0.0.1:49152"
+	req.Header.Set(config.DefaultClientIPHeader, "203.0.113.7")
 
-	req.RemoteAddr = "198.51.100.1:1234"
-	if got := clientIP(req); got != "198.51.100.1" {
-		t.Fatalf("clientIP trusted spoofed forwarding header = %q", got)
+	if got := server.clientIP(req); got != "203.0.113.7" {
+		t.Fatalf("clientIP = %q", got)
+	}
+}
+
+func TestClientIPIgnoresSpoofedHeaderFromUntrustedPeer(t *testing.T) {
+	server := testServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/login/options", nil)
+	req.RemoteAddr = "198.51.100.10:49152"
+	req.Header.Set(config.DefaultClientIPHeader, "203.0.113.7")
+
+	if got := server.clientIP(req); got != "198.51.100.10" {
+		t.Fatalf("clientIP = %q", got)
+	}
+}
+
+func TestClientIPRejectsCommaSeparatedHeader(t *testing.T) {
+	server := testServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/login/options", nil)
+	req.RemoteAddr = "127.0.0.1:49152"
+	req.Header.Set(config.DefaultClientIPHeader, "203.0.113.7, 198.51.100.10")
+
+	if got := server.clientIP(req); got != "127.0.0.1" {
+		t.Fatalf("clientIP = %q", got)
+	}
+}
+
+func TestClientIPRejectsDuplicateHeaderLines(t *testing.T) {
+	server := testServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/login/options", nil)
+	req.RemoteAddr = "127.0.0.1:49152"
+	req.Header.Add(config.DefaultClientIPHeader, "203.0.113.7")
+	req.Header.Add(config.DefaultClientIPHeader, "198.51.100.10")
+
+	if got := server.clientIP(req); got != "127.0.0.1" {
+		t.Fatalf("clientIP = %q", got)
 	}
 }

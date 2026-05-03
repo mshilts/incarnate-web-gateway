@@ -295,12 +295,13 @@ func TestSecurityHTTPForwardedClientIPRejectsAmbiguousOrInvalidHeaders(t *testin
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			server := testServer(t)
 			req := httptest.NewRequest(http.MethodPost, "/auth/passkey/login/options", nil)
 			req.RemoteAddr = tc.remoteAddr
 			for _, header := range tc.headers {
-				req.Header.Add("CF-Connecting-IP", header)
+				req.Header.Add(config.DefaultClientIPHeader, header)
 			}
-			if got := clientIP(req); got != tc.want {
+			if got := server.clientIP(req); got != tc.want {
 				t.Fatalf("clientIP = %q, want %q", got, tc.want)
 			}
 		})
@@ -383,7 +384,7 @@ func serveRateLimitedLogin(t *testing.T, server *Server, remoteAddr, cfConnectin
 	req.Header.Set("Origin", config.DefaultPublicOrigin)
 	req.Header.Set("Content-Type", "application/json")
 	if cfConnectingIP != "" {
-		req.Header.Set("CF-Connecting-IP", cfConnectingIP)
+		req.Header.Set(config.DefaultClientIPHeader, cfConnectingIP)
 	}
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)

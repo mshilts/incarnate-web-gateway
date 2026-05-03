@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -24,9 +25,14 @@ const (
 	DefaultMaxBodyBytes      int64 = 64 * 1024
 	DefaultMaxFrameBytes     int64 = 64 * 1024
 	DefaultMaxHeaderBytes          = 16 * 1024
+	DefaultClientIPHeader          = "CF-Connecting-IP"
 )
 
 var errNoAllowedOrigins = errors.New("at least one allowed origin is required")
+
+func DefaultTrustedProxyCIDRs() []string {
+	return []string{"127.0.0.1/32", "::1/128"}
+}
 
 type Config struct {
 	Bind              string
@@ -46,6 +52,8 @@ type Config struct {
 	MaxBodyBytes      int64
 	MaxFrameBytes     int64
 	MaxHeaderBytes    int
+	ClientIPHeader    string
+	TrustedProxyCIDRs []string
 }
 
 func FromEnv() (Config, error) {
@@ -92,6 +100,8 @@ func FromEnv() (Config, error) {
 		MaxBodyBytes:      int64(maxBodyBytes),
 		MaxFrameBytes:     int64(maxFrameBytes),
 		MaxHeaderBytes:    maxHeaderBytes,
+		ClientIPHeader:    getenv("INCARNATE_GATEWAY_CLIENT_IP_HEADER", DefaultClientIPHeader),
+		TrustedProxyCIDRs: getenvCSV("INCARNATE_GATEWAY_TRUSTED_PROXY_CIDRS", DefaultTrustedProxyCIDRs()),
 	}
 	if err := cfg.Validate(); err != nil {
 		errs = append(errs, err)
@@ -113,13 +123,8 @@ func (c Config) Validate() error {
 	if err := validateOrigin(c.PublicOrigin); err != nil {
 		errs = append(errs, fmt.Errorf("invalid public origin: %w", err))
 	}
-	if len(c.AllowedOrigins) == 0 {
-		errs = append(errs, errNoAllowedOrigins)
-	}
-	for _, origin := range c.AllowedOrigins {
-		if err := validateOrigin(origin); err != nil {
-			errs = append(errs, fmt.Errorf("invalid allowed origin %q: %w", origin, err))
-		}
+	if err := validateOriginAllowlist(c.AllowedOrigins); err != nil {
+		errs = append(errs, err)
 	}
 	if err := validateRPID(c.RPID); err != nil {
 		errs = append(errs, fmt.Errorf("invalid rp id: %w", err))
@@ -140,6 +145,27 @@ func (c Config) Validate() error {
 	}
 	if c.MaxBodyBytes <= 0 || c.MaxFrameBytes <= 0 || c.MaxHeaderBytes <= 0 {
 		errs = append(errs, errors.New("body, frame, and header limits must be positive"))
+	}
+	if err := validateHeaderName(c.ClientIPHeader); err != nil {
+		errs = append(errs, fmt.Errorf("invalid client ip header: %w", err))
+	}
+	for _, cidr := range c.TrustedProxyCIDRs {
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			errs = append(errs, fmt.Errorf("invalid trusted proxy cidr %q: %w", cidr, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func validateOriginAllowlist(origins []string) error {
+	var errs []error
+	if len(origins) == 0 {
+		errs = append(errs, errNoAllowedOrigins)
+	}
+	for _, origin := range origins {
+		if err := validateOrigin(origin); err != nil {
+			errs = append(errs, fmt.Errorf("invalid allowed origin %q: %w", origin, err))
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -202,6 +228,31 @@ func validateRPID(rpID string) error {
 	return nil
 }
 
+func validateHeaderName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("header name is required")
+	}
+	for _, r := range name {
+		if r > 127 || !isHTTPTokenChar(r) {
+			return errors.New("header name must be an HTTP token")
+		}
+	}
+	return nil
+}
+
+func isHTTPTokenChar(r rune) bool {
+	if r >= '0' && r <= '9' {
+		return true
+	}
+	if r >= 'A' && r <= 'Z' {
+		return true
+	}
+	if r >= 'a' && r <= 'z' {
+		return true
+	}
+	return strings.ContainsRune("!#$%&'*+-.^_`|~", r)
+}
+
 func validateLoopbackAddress(addr string) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -230,25 +281,43 @@ func getenv(key, fallback string) string {
 }
 
 func getenvInt(key string, fallback int) (int, error) {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil {
-			return 0, fmt.Errorf("%s must be an integer: %w", key, err)
-		}
-		return parsed, nil
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback, nil
 	}
-	return fallback, nil
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("%s must be an integer", key)
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	return parsed, nil
 }
 
 func getenvDuration(key string, fallback time.Duration) (time.Duration, error) {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		parsed, err := time.ParseDuration(value)
-		if err != nil {
-			return 0, fmt.Errorf("%s must be a duration: %w", key, err)
-		}
-		return parsed, nil
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback, nil
 	}
-	return fallback, nil
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("%s must be a duration", key)
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a duration: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func getenvCSV(key string, fallback []string) []string {
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		return append([]string(nil), fallback...)
+	}
+	return splitCSV(raw)
 }
 
 func splitCSV(value string) []string {

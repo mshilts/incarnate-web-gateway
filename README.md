@@ -94,9 +94,7 @@ docs/deployment-cloudflare-tunnel.md
 ## Build And Test
 
 ```sh
-go test ./...
-go test -race ./...
-go vet ./...
+make check
 go run ./cmd/incarnate-web-gateway
 ```
 
@@ -119,6 +117,8 @@ INCARNATE_GATEWAY_HMAC_SECRET_FILE=/etc/incarnate/web-gateway.hmac
 INCARNATE_GATEWAY_SESSION_SECRET_FILE=/etc/incarnate/web-gateway.session
 INCARNATE_GATEWAY_LOG_LEVEL=info
 INCARNATE_GATEWAY_MAX_HEADER_BYTES=16384
+INCARNATE_GATEWAY_CLIENT_IP_HEADER=CF-Connecting-IP
+INCARNATE_GATEWAY_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
 ```
 
 Production must use explicit HTTPS origins. Wildcards are rejected. The service

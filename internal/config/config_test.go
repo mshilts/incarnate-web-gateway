@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("INCARNATE_GATEWAY_BIND", "127.0.0.1:9000")
@@ -20,24 +23,17 @@ func TestConfigFromEnv(t *testing.T) {
 	if len(cfg.AllowedOrigins) != 2 {
 		t.Fatalf("AllowedOrigins length = %d", len(cfg.AllowedOrigins))
 	}
+	if cfg.ClientIPHeader != DefaultClientIPHeader {
+		t.Fatalf("ClientIPHeader = %q", cfg.ClientIPHeader)
+	}
+	if len(cfg.TrustedProxyCIDRs) != len(DefaultTrustedProxyCIDRs()) {
+		t.Fatalf("TrustedProxyCIDRs length = %d", len(cfg.TrustedProxyCIDRs))
+	}
 }
 
 func TestConfigRejectsWildcardOrigin(t *testing.T) {
-	cfg := Config{
-		Bind:           DefaultBind,
-		PublicOrigin:   DefaultPublicOrigin,
-		AllowedOrigins: []string{"*"},
-		RPID:           DefaultRPID,
-		RPName:         DefaultRPName,
-		JavaHost:       DefaultJavaHost,
-		JavaPort:       DefaultJavaPort,
-		GatewayID:      DefaultGatewayID,
-		SessionTTL:     1,
-		SessionIdleTTL: 1,
-		MaxBodyBytes:   1,
-		MaxFrameBytes:  1,
-		MaxHeaderBytes: 1,
-	}
+	cfg := validTestConfig()
+	cfg.AllowedOrigins = []string{"*"}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate accepted wildcard origin")
 	}
@@ -48,8 +44,30 @@ func TestConfigFromEnvRejectsInvalidValues(t *testing.T) {
 	t.Setenv("INCARNATE_GATEWAY_SESSION_TTL", "forever")
 	t.Setenv("INCARNATE_GATEWAY_MAX_BODY_BYTES", "huge")
 
-	if _, err := FromEnv(); err == nil {
+	_, err := FromEnv()
+	if err == nil {
 		t.Fatal("FromEnv accepted invalid typed environment values")
+	}
+	for _, key := range []string{
+		"INCARNATE_GATEWAY_JAVA_PORT",
+		"INCARNATE_GATEWAY_SESSION_TTL",
+		"INCARNATE_GATEWAY_MAX_BODY_BYTES",
+	} {
+		if !strings.Contains(err.Error(), key) {
+			t.Fatalf("error does not identify %s: %v", key, err)
+		}
+	}
+}
+
+func TestConfigFromEnvRejectsEmptyTypedValue(t *testing.T) {
+	t.Setenv("INCARNATE_GATEWAY_MAX_FRAME_BYTES", " ")
+
+	_, err := FromEnv()
+	if err == nil {
+		t.Fatal("FromEnv accepted empty typed environment value")
+	}
+	if !strings.Contains(err.Error(), "INCARNATE_GATEWAY_MAX_FRAME_BYTES") {
+		t.Fatalf("error does not identify bad env var: %v", err)
 	}
 }
 
@@ -102,6 +120,20 @@ func TestConfigRejectsInvalidOriginShape(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsInvalidClientIPTrustConfig(t *testing.T) {
+	cfg := validTestConfig()
+	cfg.ClientIPHeader = "Bad Header"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted invalid client IP header name")
+	}
+
+	cfg = validTestConfig()
+	cfg.TrustedProxyCIDRs = []string{"not-a-cidr"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted invalid trusted proxy CIDR")
+	}
+}
+
 func TestOriginAllowlist(t *testing.T) {
 	allowlist, err := NewOriginAllowlist([]string{"https://play.inc-realm.com"})
 	if err != nil {
@@ -115,20 +147,28 @@ func TestOriginAllowlist(t *testing.T) {
 	}
 }
 
+func TestOriginAllowlistRejectsInvalidOrigin(t *testing.T) {
+	if _, err := NewOriginAllowlist([]string{"https://play.inc-realm.com/path"}); err == nil {
+		t.Fatal("NewOriginAllowlist accepted origin with path")
+	}
+}
+
 func validTestConfig() Config {
 	return Config{
-		Bind:           DefaultBind,
-		PublicOrigin:   DefaultPublicOrigin,
-		AllowedOrigins: []string{DefaultPublicOrigin},
-		RPID:           DefaultRPID,
-		RPName:         DefaultRPName,
-		JavaHost:       DefaultJavaHost,
-		JavaPort:       DefaultJavaPort,
-		GatewayID:      DefaultGatewayID,
-		SessionTTL:     1,
-		SessionIdleTTL: 1,
-		MaxBodyBytes:   1,
-		MaxFrameBytes:  1,
-		MaxHeaderBytes: 1,
+		Bind:              DefaultBind,
+		PublicOrigin:      DefaultPublicOrigin,
+		AllowedOrigins:    []string{DefaultPublicOrigin},
+		RPID:              DefaultRPID,
+		RPName:            DefaultRPName,
+		JavaHost:          DefaultJavaHost,
+		JavaPort:          DefaultJavaPort,
+		GatewayID:         DefaultGatewayID,
+		SessionTTL:        1,
+		SessionIdleTTL:    1,
+		MaxBodyBytes:      1,
+		MaxFrameBytes:     1,
+		MaxHeaderBytes:    1,
+		ClientIPHeader:    DefaultClientIPHeader,
+		TrustedProxyCIDRs: DefaultTrustedProxyCIDRs(),
 	}
 }

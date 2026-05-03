@@ -25,7 +25,7 @@ account state and gameplay authorization.
 - enforce public request body limits
 - enforce future WebSocket frame limits
 - issue and validate short-lived opaque browser sessions
-- rate limit public auth routes
+- rate limit public auth routes by direct peer IP or a trusted proxy client-IP header
 - generate WebAuthn challenges
 - verify WebAuthn responses against the configured RP ID and origin
 - sign Java gateway-control commands with HMAC
@@ -52,6 +52,7 @@ account state and gameplay authorization.
 - HMAC command signing
 - session cookie handling
 - origin and RP ID configuration
+- trusted proxy and client-IP header configuration
 
 Every new feature should be tested against those surfaces before it lands.
 
@@ -59,6 +60,9 @@ Every new feature should be tested against those surfaces before it lands.
 
 - wildcard origin rejected
 - wrong origin rejected for every auth route and `/play/ws`
+- invalid int and duration environment values reject startup
+- spoofed client-IP headers from untrusted peers ignored
+- trailing JSON values rejected on auth request bodies
 - expired session rejected
 - idle session rejected
 - missing HMAC signature rejected by Java
