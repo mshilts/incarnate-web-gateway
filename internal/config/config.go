@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -21,8 +22,11 @@ const (
 	DefaultGatewayID               = "dev-play-gateway-1"
 	DefaultSessionCookieName       = "incarnate_gateway_session"
 	DefaultMaxBodyBytes      int64 = 64 * 1024
-	DefaultMaxFrameBytes           = 64 * 1024
+	DefaultMaxFrameBytes     int64 = 64 * 1024
+	DefaultMaxHeaderBytes          = 16 * 1024
 )
+
+var errNoAllowedOrigins = errors.New("at least one allowed origin is required")
 
 type Config struct {
 	Bind              string
@@ -41,9 +45,35 @@ type Config struct {
 	SessionIdleTTL    time.Duration
 	MaxBodyBytes      int64
 	MaxFrameBytes     int64
+	MaxHeaderBytes    int
 }
 
 func FromEnv() (Config, error) {
+	var errs []error
+	javaPort, err := getenvInt("INCARNATE_GATEWAY_JAVA_PORT", DefaultJavaPort)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	sessionTTL, err := getenvDuration("INCARNATE_GATEWAY_SESSION_TTL", 12*time.Hour)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	sessionIdleTTL, err := getenvDuration("INCARNATE_GATEWAY_SESSION_IDLE_TTL", 30*time.Minute)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	maxBodyBytes, err := getenvInt("INCARNATE_GATEWAY_MAX_BODY_BYTES", int(DefaultMaxBodyBytes))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	maxFrameBytes, err := getenvInt("INCARNATE_GATEWAY_MAX_FRAME_BYTES", int(DefaultMaxFrameBytes))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	maxHeaderBytes, err := getenvInt("INCARNATE_GATEWAY_MAX_HEADER_BYTES", DefaultMaxHeaderBytes)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	cfg := Config{
 		Bind:              getenv("INCARNATE_GATEWAY_BIND", DefaultBind),
 		PublicOrigin:      getenv("INCARNATE_GATEWAY_PUBLIC_ORIGIN", DefaultPublicOrigin),
@@ -51,18 +81,22 @@ func FromEnv() (Config, error) {
 		RPID:              getenv("INCARNATE_GATEWAY_RP_ID", DefaultRPID),
 		RPName:            getenv("INCARNATE_GATEWAY_RP_NAME", DefaultRPName),
 		JavaHost:          getenv("INCARNATE_GATEWAY_JAVA_HOST", DefaultJavaHost),
-		JavaPort:          getenvInt("INCARNATE_GATEWAY_JAVA_PORT", DefaultJavaPort),
+		JavaPort:          javaPort,
 		GatewayID:         getenv("INCARNATE_GATEWAY_ID", DefaultGatewayID),
 		HMACSecretFile:    os.Getenv("INCARNATE_GATEWAY_HMAC_SECRET_FILE"),
 		SessionSecretFile: os.Getenv("INCARNATE_GATEWAY_SESSION_SECRET_FILE"),
 		LogLevel:          getenv("INCARNATE_GATEWAY_LOG_LEVEL", "info"),
 		SessionCookieName: getenv("INCARNATE_GATEWAY_SESSION_COOKIE_NAME", DefaultSessionCookieName),
-		SessionTTL:        getenvDuration("INCARNATE_GATEWAY_SESSION_TTL", 12*time.Hour),
-		SessionIdleTTL:    getenvDuration("INCARNATE_GATEWAY_SESSION_IDLE_TTL", 30*time.Minute),
-		MaxBodyBytes:      int64(getenvInt("INCARNATE_GATEWAY_MAX_BODY_BYTES", int(DefaultMaxBodyBytes))),
-		MaxFrameBytes:     int64(getenvInt("INCARNATE_GATEWAY_MAX_FRAME_BYTES", int(DefaultMaxFrameBytes))),
+		SessionTTL:        sessionTTL,
+		SessionIdleTTL:    sessionIdleTTL,
+		MaxBodyBytes:      int64(maxBodyBytes),
+		MaxFrameBytes:     int64(maxFrameBytes),
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
-	return cfg, cfg.Validate()
+	if err := cfg.Validate(); err != nil {
+		errs = append(errs, err)
+	}
+	return cfg, errors.Join(errs...)
 }
 
 func (c Config) JavaAddress() string {
@@ -73,26 +107,30 @@ func (c Config) Validate() error {
 	var errs []error
 	if _, err := net.ResolveTCPAddr("tcp", c.Bind); err != nil {
 		errs = append(errs, fmt.Errorf("invalid bind address: %w", err))
+	} else if err := validateLoopbackAddress(c.Bind); err != nil {
+		errs = append(errs, fmt.Errorf("invalid bind address: %w", err))
 	}
 	if err := validateOrigin(c.PublicOrigin); err != nil {
 		errs = append(errs, fmt.Errorf("invalid public origin: %w", err))
 	}
 	if len(c.AllowedOrigins) == 0 {
-		errs = append(errs, errors.New("at least one allowed origin is required"))
+		errs = append(errs, errNoAllowedOrigins)
 	}
 	for _, origin := range c.AllowedOrigins {
 		if err := validateOrigin(origin); err != nil {
 			errs = append(errs, fmt.Errorf("invalid allowed origin %q: %w", origin, err))
 		}
 	}
-	if strings.Contains(c.RPID, "://") || strings.TrimSpace(c.RPID) == "" {
-		errs = append(errs, errors.New("rp id must be a bare domain"))
+	if err := validateRPID(c.RPID); err != nil {
+		errs = append(errs, fmt.Errorf("invalid rp id: %w", err))
 	}
 	if strings.TrimSpace(c.RPName) == "" {
 		errs = append(errs, errors.New("rp name is required"))
 	}
-	if c.JavaHost == "" || c.JavaPort <= 0 || c.JavaPort > 65535 {
+	if strings.TrimSpace(c.JavaHost) == "" || c.JavaPort <= 0 || c.JavaPort > 65535 {
 		errs = append(errs, errors.New("java host and port are required"))
+	} else if !isLoopbackHost(c.JavaHost) {
+		errs = append(errs, errors.New("java host must be loopback"))
 	}
 	if strings.TrimSpace(c.GatewayID) == "" {
 		errs = append(errs, errors.New("gateway id is required"))
@@ -100,13 +138,16 @@ func (c Config) Validate() error {
 	if c.SessionTTL <= 0 || c.SessionIdleTTL <= 0 {
 		errs = append(errs, errors.New("session ttl and idle ttl must be positive"))
 	}
-	if c.MaxBodyBytes <= 0 || c.MaxFrameBytes <= 0 {
-		errs = append(errs, errors.New("body and frame limits must be positive"))
+	if c.MaxBodyBytes <= 0 || c.MaxFrameBytes <= 0 || c.MaxHeaderBytes <= 0 {
+		errs = append(errs, errors.New("body, frame, and header limits must be positive"))
 	}
 	return errors.Join(errs...)
 }
 
 func validateOrigin(raw string) error {
+	if raw != strings.TrimSpace(raw) || raw == "" {
+		return errors.New("origin must not be empty or padded")
+	}
 	if raw == "*" || strings.Contains(raw, "*") {
 		return errors.New("wildcard origins are not allowed")
 	}
@@ -117,13 +158,68 @@ func validateOrigin(raw string) error {
 	if u.Scheme != "https" && u.Scheme != "http" {
 		return errors.New("origin scheme must be http or https")
 	}
-	if u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+	if u.User != nil {
+		return errors.New("origin must not include user info")
+	}
+	if u.Host == "" || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return errors.New("origin must include scheme and host only")
 	}
-	if u.Scheme == "http" && u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" {
+	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
 		return errors.New("plain http origins are limited to localhost development")
 	}
 	return nil
+}
+
+func validateRPID(rpID string) error {
+	if rpID != strings.TrimSpace(rpID) || rpID == "" {
+		return errors.New("rp id must not be empty or padded")
+	}
+	if rpID != strings.ToLower(rpID) {
+		return errors.New("rp id must be lowercase")
+	}
+	if strings.Contains(rpID, "://") || strings.ContainsAny(rpID, "*/\\:@") || strings.ContainsFunc(rpID, unicode.IsSpace) {
+		return errors.New("rp id must be a bare domain")
+	}
+	if rpID == "localhost" {
+		return nil
+	}
+	if net.ParseIP(rpID) != nil {
+		return errors.New("rp id must be a domain, not an IP address")
+	}
+	if len(rpID) > 253 || strings.HasPrefix(rpID, ".") || strings.HasSuffix(rpID, ".") || !strings.Contains(rpID, ".") {
+		return errors.New("rp id must be a fully qualified domain without leading or trailing dots")
+	}
+	for _, label := range strings.Split(rpID, ".") {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return errors.New("rp id contains an invalid domain label")
+		}
+		for _, r := range label {
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+				return errors.New("rp id contains an invalid domain character")
+			}
+		}
+	}
+	return nil
+}
+
+func validateLoopbackAddress(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	if !isLoopbackHost(host) {
+		return errors.New("host must be loopback")
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func getenv(key, fallback string) string {
@@ -133,22 +229,26 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
-func getenvInt(key string, fallback int) int {
+func getenvInt(key string, fallback int) (int, error) {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		if parsed, err := strconv.Atoi(value); err == nil {
-			return parsed
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 		}
+		return parsed, nil
 	}
-	return fallback
+	return fallback, nil
 }
 
-func getenvDuration(key string, fallback time.Duration) time.Duration {
+func getenvDuration(key string, fallback time.Duration) (time.Duration, error) {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		if parsed, err := time.ParseDuration(value); err == nil {
-			return parsed
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be a duration: %w", key, err)
 		}
+		return parsed, nil
 	}
-	return fallback
+	return fallback, nil
 }
 
 func splitCSV(value string) []string {

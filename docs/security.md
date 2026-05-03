@@ -30,6 +30,8 @@ account state and gameplay authorization.
 - verify WebAuthn responses against the configured RP ID and origin
 - sign Java gateway-control commands with HMAC
 - log audit events without leaking secrets to clients
+- fail closed on malformed security-relevant configuration
+- trust Cloudflare client IP headers only from the local tunnel process
 
 ## Non-Responsibilities
 
@@ -66,9 +68,10 @@ Every new feature should be tested against those surfaces before it lands.
 - expired WebAuthn challenge rejected
 - replayed WebAuthn challenge rejected
 - oversized HTTP body rejected
+- oversized HTTP headers rejected by the Go server
 - oversized WebSocket frame rejected
 - unauthenticated `/play/ws` rejected
 
 The `v0.1` skeleton includes tests for config parsing, origin allowlisting,
-session lifecycle, HMAC signing, and basic rate limiting.
-
+strict JSON request parsing, session lifecycle, HMAC signing, and basic rate
+limiting.

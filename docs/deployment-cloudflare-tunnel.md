@@ -54,7 +54,7 @@ Access is not a replacement for Incarnate account passkey auth.
 - `GET https://play.inc-realm.com/healthz` returns `200`
 - direct VM public scans do not reach `8789`
 - Java AI socket remains private
+- the systemd unit allows only loopback network traffic for the gateway process
 - auth routes reject wrong origins
 - `/play/ws` rejects missing sessions
 - logs contain audit events but no secrets
-

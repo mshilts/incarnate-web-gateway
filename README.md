@@ -118,9 +118,12 @@ INCARNATE_GATEWAY_ID=prod-play-gateway-1
 INCARNATE_GATEWAY_HMAC_SECRET_FILE=/etc/incarnate/web-gateway.hmac
 INCARNATE_GATEWAY_SESSION_SECRET_FILE=/etc/incarnate/web-gateway.session
 INCARNATE_GATEWAY_LOG_LEVEL=info
+INCARNATE_GATEWAY_MAX_HEADER_BYTES=16384
 ```
 
-Production must use explicit HTTPS origins. Wildcards are rejected.
+Production must use explicit HTTPS origins. Wildcards are rejected. The service
+fails closed on malformed typed configuration and requires loopback bind and
+Java backend addresses.
 
 See [docs/configuration.md](docs/configuration.md) for the full list.
 
@@ -139,4 +142,3 @@ The passkey and WebSocket routes enforce the first perimeter checks but return
 ## Release
 
 `v0.1.0` is the first clean skeleton tag when tests pass.
-

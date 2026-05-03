@@ -10,6 +10,7 @@ Group=incarnate
 ExecStart=/usr/local/bin/incarnate-web-gateway
 Restart=on-failure
 RestartSec=3
+UMask=0077
 
 Environment=INCARNATE_GATEWAY_BIND=127.0.0.1:8789
 Environment=INCARNATE_GATEWAY_PUBLIC_ORIGIN=https://play.inc-realm.com
@@ -23,17 +24,32 @@ Environment=INCARNATE_GATEWAY_HMAC_SECRET_FILE=/etc/incarnate/web-gateway.hmac
 Environment=INCARNATE_GATEWAY_SESSION_SECRET_FILE=/etc/incarnate/web-gateway.session
 Environment=INCARNATE_GATEWAY_LOG_LEVEL=info
 
+AmbientCapabilities=
+CapabilityBoundingSet=
 NoNewPrivileges=true
+PrivateDevices=true
 PrivateTmp=true
-ProtectSystem=strict
 ProtectHome=true
+ProtectSystem=strict
+ProtectClock=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProcSubset=pid
 ReadWritePaths=/var/lib/incarnate-web-gateway
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
-RestrictRealtime=true
+IPAddressDeny=any
+IPAddressAllow=localhost
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
-

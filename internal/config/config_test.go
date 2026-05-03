@@ -36,9 +36,69 @@ func TestConfigRejectsWildcardOrigin(t *testing.T) {
 		SessionIdleTTL: 1,
 		MaxBodyBytes:   1,
 		MaxFrameBytes:  1,
+		MaxHeaderBytes: 1,
 	}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate accepted wildcard origin")
+	}
+}
+
+func TestConfigFromEnvRejectsInvalidValues(t *testing.T) {
+	t.Setenv("INCARNATE_GATEWAY_JAVA_PORT", "not-a-port")
+	t.Setenv("INCARNATE_GATEWAY_SESSION_TTL", "forever")
+	t.Setenv("INCARNATE_GATEWAY_MAX_BODY_BYTES", "huge")
+
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv accepted invalid typed environment values")
+	}
+}
+
+func TestConfigRejectsPublicBindAndJavaHost(t *testing.T) {
+	cfg := validTestConfig()
+	cfg.Bind = "0.0.0.0:8789"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted public bind address")
+	}
+
+	cfg = validTestConfig()
+	cfg.JavaHost = "10.0.0.5"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted non-loopback Java host")
+	}
+}
+
+func TestConfigRejectsBadRPID(t *testing.T) {
+	badIDs := []string{
+		"https://inc-realm.com",
+		"inc-realm.com/path",
+		"*.inc-realm.com",
+		"inc realm.com",
+		"inc-realm",
+		"Inc-Realm.com",
+		"127.0.0.1",
+	}
+	for _, rpID := range badIDs {
+		cfg := validTestConfig()
+		cfg.RPID = rpID
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("Validate accepted bad rp id %q", rpID)
+		}
+	}
+}
+
+func TestConfigRejectsInvalidOriginShape(t *testing.T) {
+	badOrigins := []string{
+		"https://user@play.inc-realm.com",
+		"https://play.inc-realm.com?",
+		" https://play.inc-realm.com",
+		"http://play.inc-realm.com",
+	}
+	for _, origin := range badOrigins {
+		cfg := validTestConfig()
+		cfg.AllowedOrigins = []string{origin}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("Validate accepted bad origin %q", origin)
+		}
 	}
 }
 
@@ -52,5 +112,23 @@ func TestOriginAllowlist(t *testing.T) {
 	}
 	if allowlist.Allows("https://evil.example") {
 		t.Fatal("unexpected origin allowed")
+	}
+}
+
+func validTestConfig() Config {
+	return Config{
+		Bind:           DefaultBind,
+		PublicOrigin:   DefaultPublicOrigin,
+		AllowedOrigins: []string{DefaultPublicOrigin},
+		RPID:           DefaultRPID,
+		RPName:         DefaultRPName,
+		JavaHost:       DefaultJavaHost,
+		JavaPort:       DefaultJavaPort,
+		GatewayID:      DefaultGatewayID,
+		SessionTTL:     1,
+		SessionIdleTTL: 1,
+		MaxBodyBytes:   1,
+		MaxFrameBytes:  1,
+		MaxHeaderBytes: 1,
 	}
 }

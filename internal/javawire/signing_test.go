@@ -44,3 +44,13 @@ func TestHMACRejectsShortSecret(t *testing.T) {
 		t.Fatal("Sign accepted short secret")
 	}
 }
+
+func TestHMACVerifyRejectsShortSecret(t *testing.T) {
+	ok, err := Verify([]byte("short"), map[string]any{"signature": "x"})
+	if err == nil {
+		t.Fatal("Verify accepted short secret")
+	}
+	if ok {
+		t.Fatal("short secret verified")
+	}
+}

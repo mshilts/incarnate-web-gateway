@@ -22,6 +22,7 @@ config parser.
 | `INCARNATE_GATEWAY_SESSION_IDLE_TTL` | `30m` | Idle browser session lifetime. |
 | `INCARNATE_GATEWAY_MAX_BODY_BYTES` | `65536` | Maximum HTTP request body size. |
 | `INCARNATE_GATEWAY_MAX_FRAME_BYTES` | `65536` | Future maximum WebSocket frame/message size. |
+| `INCARNATE_GATEWAY_MAX_HEADER_BYTES` | `16384` | Maximum HTTP request header size. |
 
 ## Origin Rules
 
@@ -41,6 +42,13 @@ http://localhost:5173
 
 Do not include localhost origins in production systemd units.
 
+Typed configuration values fail closed. Invalid integers and durations stop the
+service instead of silently falling back to defaults.
+
+The gateway bind address and Java socket host must be loopback addresses. The
+intended deployment path is local-only gateway exposure through Cloudflare
+Tunnel, not a public listener on the VM.
+
 ## Secrets
 
 The HMAC secret protects gateway-control commands sent to Java. Use at least 32
@@ -59,4 +67,3 @@ chmod 0640 /etc/incarnate/web-gateway.hmac
 Secret rotation should support a current and previous secret before production.
 The `v0.1` skeleton validates signing primitives but does not load or rotate the
 secret file yet.
-

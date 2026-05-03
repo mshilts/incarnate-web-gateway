@@ -21,11 +21,12 @@ type Record struct {
 }
 
 type Store struct {
-	mu      sync.Mutex
-	ttl     time.Duration
-	idleTTL time.Duration
-	now     func() time.Time
-	records map[string]Record
+	mu        sync.Mutex
+	ttl       time.Duration
+	idleTTL   time.Duration
+	now       func() time.Time
+	nextPrune time.Time
+	records   map[string]Record
 }
 
 func NewStore(ttl, idleTTL time.Duration) *Store {
@@ -60,6 +61,7 @@ func (s *Store) Create(account, credentialID, credentialLabel string) (Record, e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneExpiredLocked(now)
 	s.records[id] = record
 	return record, nil
 }
@@ -72,7 +74,7 @@ func (s *Store) Get(id string) (Record, error) {
 		return Record{}, ErrNotFound
 	}
 	now := s.now()
-	if !now.Before(record.ExpiresAt) || now.Sub(record.LastSeenAt) > s.idleTTL {
+	if s.expired(record, now) {
 		delete(s.records, id)
 		return Record{}, ErrNotFound
 	}
@@ -85,6 +87,29 @@ func (s *Store) Delete(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.records, id)
+}
+
+func (s *Store) pruneExpiredLocked(now time.Time) {
+	if len(s.records) == 0 || (!s.nextPrune.IsZero() && now.Before(s.nextPrune)) {
+		return
+	}
+	for id, record := range s.records {
+		if s.expired(record, now) {
+			delete(s.records, id)
+		}
+	}
+	s.nextPrune = now.Add(minDuration(s.ttl, s.idleTTL))
+}
+
+func (s *Store) expired(record Record, now time.Time) bool {
+	return !now.Before(record.ExpiresAt) || now.Sub(record.LastSeenAt) > s.idleTTL
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func randomID() (string, error) {

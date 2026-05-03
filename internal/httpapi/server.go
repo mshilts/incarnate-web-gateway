@@ -3,7 +3,9 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"strings"
@@ -51,7 +53,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /auth/passkey/register/options", s.registerOptions)
 	mux.HandleFunc("POST /auth/passkey/register/verify", s.registerVerify)
 	mux.HandleFunc("GET /play/ws", s.playWS)
-	return http.MaxBytesHandler(rejectUnknown(mux), s.cfg.MaxBodyBytes)
+	return http.MaxBytesHandler(mux, s.cfg.MaxBodyBytes)
 }
 
 func (s *Server) HTTPServer() *http.Server {
@@ -62,6 +64,7 @@ func (s *Server) HTTPServer() *http.Server {
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    s.cfg.MaxHeaderBytes,
 	}
 }
 
@@ -73,6 +76,9 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) loginOptions(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOrigin(w, r) || !s.requireRateLimit(w, r, "login-options") {
+		return
+	}
+	if !requireJSONContentType(w, r) {
 		return
 	}
 	var req passkeys.LoginOptionsRequest
@@ -98,6 +104,9 @@ func (s *Server) loginVerify(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOrigin(w, r) || !s.requireRateLimit(w, r, "login-verify") {
 		return
 	}
+	if !requireJSONContentType(w, r) {
+		return
+	}
 	var req map[string]any
 	if !decodeJSON(w, r, &req) {
 		return
@@ -113,6 +122,9 @@ func (s *Server) loginVerify(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) registerOptions(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOrigin(w, r) || !s.requireRateLimit(w, r, "register-options") {
+		return
+	}
+	if !requireJSONContentType(w, r) {
 		return
 	}
 	var req passkeys.RegistrationOptionsRequest
@@ -134,6 +146,9 @@ func (s *Server) registerOptions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) registerVerify(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOrigin(w, r) || !s.requireRateLimit(w, r, "register-verify") {
+		return
+	}
+	if !requireJSONContentType(w, r) {
 		return
 	}
 	var req map[string]any
@@ -162,7 +177,7 @@ func (s *Server) playWS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "valid session is required")
 		return
 	}
-	if r.ContentLength > 0 {
+	if r.ContentLength != 0 {
 		writeError(w, http.StatusBadRequest, "websocket upgrade must not include a request body")
 		return
 	}
@@ -170,7 +185,18 @@ func (s *Server) playWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) requireOrigin(w http.ResponseWriter, r *http.Request) bool {
-	origin := r.Header.Get("Origin")
+	origins := r.Header.Values("Origin")
+	if len(origins) != 1 {
+		s.audit.Event(r.Context(), "origin_rejected", "originCount", len(origins), "path", r.URL.Path)
+		writeError(w, http.StatusForbidden, "origin is not allowed")
+		return false
+	}
+	origin := origins[0]
+	if origin != strings.TrimSpace(origin) {
+		s.audit.Event(r.Context(), "origin_rejected", "origin", origin, "path", r.URL.Path)
+		writeError(w, http.StatusForbidden, "origin is not allowed")
+		return false
+	}
 	if origin == "" || !s.origins.Allows(origin) {
 		s.audit.Event(r.Context(), "origin_rejected", "origin", origin, "path", r.URL.Path)
 		writeError(w, http.StatusForbidden, "origin is not allowed")
@@ -188,18 +214,32 @@ func (s *Server) requireRateLimit(w http.ResponseWriter, r *http.Request, action
 	return true
 }
 
-func rejectUnknown(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
-	})
-}
-
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	defer r.Body.Close()
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return false
+		}
 		writeError(w, http.StatusBadRequest, "invalid json")
+		return false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return false
+	}
+	return true
+}
+
+func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
+	contentType := r.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil || !strings.EqualFold(mediaType, "application/json") {
+		writeError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
 		return false
 	}
 	return true
@@ -214,10 +254,33 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err == nil {
+		if ip := forwardedClientIP(r, host); ip != "" {
+			return ip
+		}
 		return host
 	}
 	if strings.TrimSpace(r.RemoteAddr) == "" {
 		return "unknown"
 	}
 	return r.RemoteAddr
+}
+
+func forwardedClientIP(r *http.Request, remoteHost string) string {
+	remoteIP := net.ParseIP(remoteHost)
+	if remoteIP == nil || !remoteIP.IsLoopback() {
+		return ""
+	}
+	values := r.Header.Values("CF-Connecting-IP")
+	if len(values) != 1 {
+		return ""
+	}
+	value := strings.TrimSpace(values[0])
+	if strings.Contains(value, ",") {
+		return ""
+	}
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
 }

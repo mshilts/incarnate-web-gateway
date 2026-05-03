@@ -48,6 +48,9 @@ func (s Signer) Sign(payload map[string]any) (map[string]any, error) {
 }
 
 func Verify(secret []byte, signed map[string]any) (bool, error) {
+	if len(secret) < 32 {
+		return false, errors.New("hmac secret must be at least 32 bytes")
+	}
 	signature, ok := signed["signature"].(string)
 	if !ok || signature == "" {
 		return false, errors.New("signature is required")
