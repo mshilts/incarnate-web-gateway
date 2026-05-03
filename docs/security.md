@@ -74,4 +74,6 @@ Every new feature should be tested against those surfaces before it lands.
 
 The `v0.1` skeleton includes tests for config parsing, origin allowlisting,
 strict JSON request parsing, session lifecycle, HMAC signing, and basic rate
-limiting.
+limiting. Security regression coverage lives in package-local
+`security_test.go` files so it runs as part of `go test ./...` instead of a
+separate script.
