@@ -89,12 +89,14 @@ systemd/incarnate-web-gateway.service
 docs/configuration.md
 docs/security.md
 docs/deployment-cloudflare-tunnel.md
+docs/latency.md
 ```
 
 ## Build And Test
 
 ```sh
 make check
+make bench
 go run ./cmd/incarnate-web-gateway
 ```
 
