@@ -55,6 +55,7 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 	javaClient := javawire.Client{
 		Addr:    cfg.JavaAddress(),
 		Timeout: cfg.JavaTimeout,
+		MaxLine: int(cfg.MaxFrameBytes),
 		Signer: javawire.Signer{
 			GatewayID: cfg.GatewayID,
 			Secret:    secret,
@@ -284,6 +285,7 @@ func (s *Server) playWS(w http.ResponseWriter, r *http.Request) {
 		_ = wsConn.Close(websocket.StatusNormalClosure, "")
 		return
 	}
+	s.audit.Event(r.Context(), "play_ws_proxy_closed", "error", err.Error())
 	_ = wsConn.Close(websocket.StatusPolicyViolation, "proxy violation")
 }
 

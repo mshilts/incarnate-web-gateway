@@ -152,6 +152,7 @@ func (c Client) BeginSession(ctx context.Context, account, credentialID, credent
 	if result.Account != "" && result.Account != account {
 		return nil, nil, SessionResult{}, fmt.Errorf("%w: session account mismatch", ErrProtocol)
 	}
+	_ = conn.SetDeadline(time.Time{})
 	closeOnError = false
 	return conn, reader, result, nil
 }

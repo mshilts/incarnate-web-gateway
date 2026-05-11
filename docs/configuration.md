@@ -24,7 +24,7 @@ config parser.
 | `INCARNATE_GATEWAY_SESSION_IDLE_TTL` | `30m` | Idle browser session lifetime. |
 | `INCARNATE_GATEWAY_JAVA_TIMEOUT` | `10s` | Dial/read/write timeout for signed Java gateway-control exchanges. |
 | `INCARNATE_GATEWAY_MAX_BODY_BYTES` | `65536` | Maximum HTTP request body size. |
-| `INCARNATE_GATEWAY_MAX_FRAME_BYTES` | `65536` | Maximum browser WebSocket and Java NDJSON frame/message size. |
+| `INCARNATE_GATEWAY_MAX_FRAME_BYTES` | `1048576` | Maximum browser WebSocket and Java NDJSON frame/message size. |
 | `INCARNATE_GATEWAY_MAX_HEADER_BYTES` | `16384` | Maximum HTTP request header size. |
 | `INCARNATE_GATEWAY_CLIENT_IP_HEADER` | `CF-Connecting-IP` | Single-IP header trusted only from configured proxy CIDRs. |
 | `INCARNATE_GATEWAY_TRUSTED_PROXY_CIDRS` | `127.0.0.1/32,::1/128` | Comma-separated proxy CIDRs allowed to supply the client-IP header. Empty disables proxy header trust. |

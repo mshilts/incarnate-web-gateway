@@ -23,7 +23,7 @@ const (
 	DefaultGatewayID               = "dev-play-gateway-1"
 	DefaultSessionCookieName       = "incarnate_gateway_session"
 	DefaultMaxBodyBytes      int64 = 64 * 1024
-	DefaultMaxFrameBytes     int64 = 64 * 1024
+	DefaultMaxFrameBytes     int64 = 1024 * 1024
 	DefaultMaxHeaderBytes          = 16 * 1024
 	DefaultClientIPHeader          = "CF-Connecting-IP"
 	DefaultJavaTimeout             = 10 * time.Second
