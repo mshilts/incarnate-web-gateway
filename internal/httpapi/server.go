@@ -597,11 +597,24 @@ func proxyBrowserToJava(ctx context.Context, wsConn *websocket.Conn, javaConn ne
 		if !json.Valid(data) {
 			return errors.New("websocket frame must be json")
 		}
+		if isBrowserLocalFrame(data) {
+			continue
+		}
 		data = append(data, '\n')
 		if _, err := javaConn.Write(data); err != nil {
 			return err
 		}
 	}
+}
+
+func isBrowserLocalFrame(data []byte) bool {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return false
+	}
+	return envelope.Type == "client_debug"
 }
 
 func proxyJavaToBrowser(ctx context.Context, wsConn *websocket.Conn, javaReader *bufio.Reader, maxFrameBytes int64) error {

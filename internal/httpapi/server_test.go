@@ -491,6 +491,77 @@ func TestPlayWSProxiesAfterJavaSessionBegin(t *testing.T) {
 	}
 }
 
+func TestPlayWSDropsBrowserLocalClientDebugFrames(t *testing.T) {
+	server := testServer(t)
+	server.cfg.MaxFrameBytes = 1024
+	record, err := server.sessions.Create("matt", "Y3JlZA", "iphone")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	sessionBegin := make(chan map[string]any, 1)
+	forwarded := make(chan map[string]any, 1)
+	server.java.Dialer = func(context.Context, string) (net.Conn, error) {
+		javaSide, gatewaySide := net.Pipe()
+		go func() {
+			reader := bufio.NewReader(javaSide)
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var req map[string]any
+			_ = json.Unmarshal(line, &req)
+			sessionBegin <- req
+			_, _ = javaSide.Write([]byte(`{"type":"gateway_session_result","ok":true,"account":"matt","credentialLabel":"iphone"}` + "\n"))
+			line, err = reader.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			req = map[string]any{}
+			_ = json.Unmarshal(line, &req)
+			forwarded <- req
+			_, _ = javaSide.Write(line)
+		}()
+		return gatewaySide, nil
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/play/ws"
+	wsConn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Origin": []string{config.DefaultPublicOrigin},
+			"Cookie": []string{(&http.Cookie{Name: config.DefaultSessionCookieName, Value: record.ID}).String()},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Dial websocket: %v", err)
+	}
+	defer wsConn.Close(websocket.StatusNormalClosure, "")
+	req := <-sessionBegin
+	if req["type"] != "gateway_session_begin" || req["account"] != "matt" || req["signature"] == "" {
+		t.Fatalf("bad session begin: %+v", req)
+	}
+	if err := wsConn.Write(ctx, websocket.MessageText, []byte(`{"type":"client_debug","source":"browser","event":"viewport_radius_request","detail":{"radius":15}}`)); err != nil {
+		t.Fatalf("websocket debug write: %v", err)
+	}
+	if err := wsConn.Write(ctx, websocket.MessageText, []byte(`{"type":"ping"}`)); err != nil {
+		t.Fatalf("websocket ping write: %v", err)
+	}
+	req = <-forwarded
+	if req["type"] != "ping" {
+		t.Fatalf("forwarded frame = %+v, want ping", req)
+	}
+	messageType, data, err := wsConn.Read(ctx)
+	if err != nil {
+		t.Fatalf("websocket read: %v", err)
+	}
+	if messageType != websocket.MessageText || string(data) != `{"type":"ping"}` {
+		t.Fatalf("unexpected websocket echo: type=%v data=%s", messageType, data)
+	}
+}
+
 func TestPlayWSHeartbeatRefreshesSessionIdleTTL(t *testing.T) {
 	originalInterval := browserWebSocketPingInterval
 	originalTimeout := browserWebSocketPingTimeout
