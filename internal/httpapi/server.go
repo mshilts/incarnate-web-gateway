@@ -207,8 +207,7 @@ func (s *Server) isEffectivelyHTTPS(r *http.Request) bool {
 	if singleHeaderToken(r.Header, "X-Forwarded-Proto") == "https" {
 		return true
 	}
-	forwarded := singleHeaderToken(r.Header, "Forwarded")
-	return forwardedProto(forwarded) == "https"
+	return false
 }
 
 func (s *Server) authPreflight(w http.ResponseWriter, r *http.Request) {
@@ -707,21 +706,6 @@ func singleHeaderToken(header http.Header, name string) string {
 		return ""
 	}
 	return strings.ToLower(value)
-}
-
-func forwardedProto(value string) string {
-	for _, part := range strings.Split(value, ";") {
-		key, raw, found := strings.Cut(strings.TrimSpace(part), "=")
-		if !found || !strings.EqualFold(strings.TrimSpace(key), "proto") {
-			continue
-		}
-		proto := strings.Trim(strings.TrimSpace(raw), `"`)
-		if proto == "" || strings.ContainsAny(proto, ",;") {
-			return ""
-		}
-		return strings.ToLower(proto)
-	}
-	return ""
 }
 
 func parseProxyCIDRs(cidrs []string) ([]netip.Prefix, error) {

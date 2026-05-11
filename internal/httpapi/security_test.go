@@ -234,7 +234,7 @@ func TestSecurityHTTPRedirectsPublicHTTPToHTTPS(t *testing.T) {
 	assertBrowserHardeningHeaders(t, rec.Header(), true)
 }
 
-func TestSecurityHTTPSRedirectTrustsForwardedProtoOnlyFromTrustedProxy(t *testing.T) {
+func TestSecurityHTTPSRedirectTrustsXForwardedProtoOnlyFromTrustedProxy(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		remoteAddr string
@@ -243,7 +243,7 @@ func TestSecurityHTTPSRedirectTrustsForwardedProtoOnlyFromTrustedProxy(t *testin
 		want       int
 	}{
 		{name: "trusted-x-forwarded-proto", remoteAddr: "127.0.0.1:1000", headerName: "X-Forwarded-Proto", header: "https", want: http.StatusOK},
-		{name: "trusted-forwarded", remoteAddr: "127.0.0.1:1000", headerName: "Forwarded", header: "for=203.0.113.10;proto=https;host=play.inc-realm.com", want: http.StatusOK},
+		{name: "trusted-forwarded", remoteAddr: "127.0.0.1:1000", headerName: "Forwarded", header: "for=203.0.113.10;proto=https;host=play.inc-realm.com", want: http.StatusPermanentRedirect},
 		{name: "untrusted-x-forwarded-proto", remoteAddr: "198.51.100.1:1000", headerName: "X-Forwarded-Proto", header: "https", want: http.StatusPermanentRedirect},
 		{name: "ambiguous-x-forwarded-proto", remoteAddr: "127.0.0.1:1000", headerName: "X-Forwarded-Proto", header: "https,http", want: http.StatusPermanentRedirect},
 	} {
