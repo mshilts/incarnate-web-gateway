@@ -235,10 +235,6 @@ func (s *Server) loginOptions(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.Account == "" {
-		writeError(w, http.StatusBadRequest, "account is required")
-		return
-	}
 	response, err := s.passkeys.LoginOptions(r.Context(), req)
 	if errors.Is(err, passkeys.ErrNotImplemented) {
 		writeError(w, http.StatusNotImplemented, "passkey login options are not implemented in v0.1")

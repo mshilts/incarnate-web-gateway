@@ -113,10 +113,11 @@ type WebAuthnService struct {
 }
 
 type loginCeremony struct {
-	Account     string
-	Credentials []javawire.Credential
-	Session     webauthnlib.SessionData
-	ExpiresAt   time.Time
+	Account      string
+	Credentials  []javawire.Credential
+	Session      webauthnlib.SessionData
+	ExpiresAt    time.Time
+	Discoverable bool
 }
 
 type registrationCeremony struct {
@@ -136,7 +137,7 @@ func NewWebAuthnService(cfg ServiceConfig, java JavaClient) (*WebAuthnService, e
 		RPDisplayName: cfg.RPName,
 		RPOrigins:     cfg.AllowedOrigins,
 		AuthenticatorSelection: protocol.AuthenticatorSelection{
-			ResidentKey:      protocol.ResidentKeyRequirementPreferred,
+			ResidentKey:      protocol.ResidentKeyRequirementRequired,
 			UserVerification: protocol.VerificationRequired,
 		},
 	})
@@ -156,6 +157,40 @@ func NewWebAuthnService(cfg ServiceConfig, java JavaClient) (*WebAuthnService, e
 
 func (s *WebAuthnService) LoginOptions(ctx context.Context, req LoginOptionsRequest) (map[string]any, error) {
 	account := strings.TrimSpace(req.Account)
+	if account == "" {
+		return s.discoverableLoginOptions()
+	}
+	return s.accountLoginOptions(ctx, account)
+}
+
+func (s *WebAuthnService) discoverableLoginOptions() (map[string]any, error) {
+	assertion, session, err := s.webAuthn.BeginDiscoverableMediatedLogin(
+		protocol.MediationConditional,
+		webauthnlib.WithUserVerification(protocol.VerificationRequired),
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, err := randomID()
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.pruneLocked()
+	s.loginPending[id] = loginCeremony{
+		Session:      *session,
+		ExpiresAt:    s.now().Add(s.ttl),
+		Discoverable: true,
+	}
+	s.mu.Unlock()
+	return map[string]any{
+		"ok":        true,
+		"publicKey": assertion.Response,
+		"loginId":   id,
+	}, nil
+}
+
+func (s *WebAuthnService) accountLoginOptions(ctx context.Context, account string) (map[string]any, error) {
 	if account == "" {
 		return nil, ErrRejected
 	}
@@ -199,6 +234,9 @@ func (s *WebAuthnService) LoginVerify(ctx context.Context, req LoginVerifyReques
 	if err != nil {
 		return AuthenticatedCredential{}, err
 	}
+	if ceremony.Discoverable {
+		return s.finishDiscoverableLogin(ctx, ceremony, req.Response)
+	}
 	user := javaUser{account: ceremony.Account, credentials: ceremony.Credentials}
 	credential, err := s.webAuthn.FinishLogin(user, ceremony.Session, rawCredentialRequest(req.Response))
 	if err != nil {
@@ -210,6 +248,57 @@ func (s *WebAuthnService) LoginVerify(ctx context.Context, req LoginVerifyReques
 		return AuthenticatedCredential{}, err
 	}
 	return AuthenticatedCredential{Account: ceremony.Account, CredentialID: credentialID, CredentialLabel: label}, nil
+}
+
+func (s *WebAuthnService) finishDiscoverableLogin(ctx context.Context, ceremony loginCeremony, response json.RawMessage) (AuthenticatedCredential, error) {
+	var resolved javaUser
+	handler := func(rawID, userHandle []byte) (webauthnlib.User, error) {
+		user, err := s.discoverableUser(ctx, rawID, userHandle)
+		if err != nil {
+			return nil, err
+		}
+		javaUser, ok := user.(javaUser)
+		if !ok {
+			return nil, ErrRejected
+		}
+		resolved = javaUser
+		return resolved, nil
+	}
+	user, credential, err := s.webAuthn.FinishPasskeyLogin(handler, ceremony.Session, rawCredentialRequest(response))
+	if err != nil {
+		return AuthenticatedCredential{}, err
+	}
+	account := strings.TrimSpace(user.WebAuthnName())
+	if account == "" {
+		return AuthenticatedCredential{}, ErrRejected
+	}
+	credentialID := javawire.EncodeBase64URL(credential.ID)
+	label := labelForCredential(resolved.credentials, credentialID)
+	if _, err := s.java.UpdateCounter(ctx, account, credentialID, credential.Authenticator.SignCount); err != nil {
+		return AuthenticatedCredential{}, err
+	}
+	return AuthenticatedCredential{Account: account, CredentialID: credentialID, CredentialLabel: label}, nil
+}
+
+func (s *WebAuthnService) discoverableUser(ctx context.Context, rawID, userHandle []byte) (webauthnlib.User, error) {
+	account, err := normalizeLoginAccount(string(userHandle))
+	if err != nil {
+		return nil, ErrRejected
+	}
+	lookup, err := s.java.LookupPasskeys(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	if len(lookup.Credentials) == 0 {
+		return nil, ErrRejected
+	}
+	credentialID := javawire.EncodeBase64URL(rawID)
+	for _, credential := range lookup.Credentials {
+		if credential.Active && credential.CredentialID == credentialID {
+			return javaUser{account: account, credentials: lookup.Credentials}, nil
+		}
+	}
+	return nil, ErrRejected
 }
 
 func (s *WebAuthnService) RegistrationOptions(ctx context.Context, req RegistrationOptionsRequest) (map[string]any, error) {
@@ -251,7 +340,7 @@ func (s *WebAuthnService) beginRegistration(account, label string, credentials [
 	user := javaUser{account: account, credentials: credentials}
 	creation, session, err := s.webAuthn.BeginRegistration(user,
 		webauthnlib.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
-			ResidentKey:      protocol.ResidentKeyRequirementPreferred,
+			ResidentKey:      protocol.ResidentKeyRequirementRequired,
 			UserVerification: protocol.VerificationRequired,
 		}),
 	)
@@ -488,13 +577,31 @@ func normalizeSignupAccount(value string) (string, error) {
 	if len(account) < 3 || len(account) > 32 || isReservedSignupAccount(account) {
 		return "", ErrRejected
 	}
+	if !isSafeAccountName(account) {
+		return "", ErrRejected
+	}
+	return account, nil
+}
+
+func normalizeLoginAccount(value string) (string, error) {
+	account := strings.TrimSpace(value)
+	if len(account) < 3 || len(account) > 32 {
+		return "", ErrRejected
+	}
+	if !isSafeAccountName(account) {
+		return "", ErrRejected
+	}
+	return account, nil
+}
+
+func isSafeAccountName(account string) bool {
 	for _, ch := range account {
 		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.' {
 			continue
 		}
-		return "", ErrRejected
+		return false
 	}
-	return account, nil
+	return true
 }
 
 func normalizePasskeyLabel(value string) (string, error) {

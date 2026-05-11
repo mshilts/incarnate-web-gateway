@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/mshilts/incarnate-web-gateway/internal/javawire"
 )
 
@@ -125,6 +126,108 @@ func TestLoginOptionsUsesJavaCredentialLookup(t *testing.T) {
 	}
 	if response["loginId"] == "" || response["publicKey"] == nil {
 		t.Fatalf("unexpected response: %+v", response)
+	}
+}
+
+func TestDiscoverableLoginOptionsUseEmptyAllowCredentials(t *testing.T) {
+	java := &fakeJava{lookupErr: errors.New("lookup should not be called")}
+	service := testWebAuthnService(t, java)
+	response, err := service.LoginOptions(context.Background(), LoginOptionsRequest{})
+	if err != nil {
+		t.Fatalf("LoginOptions: %v", err)
+	}
+	if response["loginId"] == "" || response["publicKey"] == nil {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+	publicKey, ok := response["publicKey"].(protocol.PublicKeyCredentialRequestOptions)
+	if !ok {
+		t.Fatalf("publicKey type = %T", response["publicKey"])
+	}
+	if len(publicKey.AllowedCredentials) != 0 {
+		t.Fatalf("AllowedCredentials = %+v, want empty", publicKey.AllowedCredentials)
+	}
+	if publicKey.UserVerification != protocol.VerificationRequired {
+		t.Fatalf("UserVerification = %q", publicKey.UserVerification)
+	}
+	if java.lookupAccount != "" {
+		t.Fatalf("LookupPasskeys account = %q", java.lookupAccount)
+	}
+}
+
+func TestDiscoverableUserLooksUpAccountFromUserHandleAndRequiresRawCredentialID(t *testing.T) {
+	service := testWebAuthnService(t, &fakeJava{credentials: []javawire.Credential{{
+		Label:         "iphone",
+		Active:        true,
+		CredentialID:  "Y3JlZA",
+		PublicKeyCOSE: "cHVibGlj",
+		SignCount:     1,
+		Transports:    []string{"internal"},
+		RPID:          "localhost",
+		Origin:        "http://localhost:8789",
+	}}})
+	user, err := service.discoverableUser(context.Background(), []byte("cred"), []byte("matt"))
+	if err != nil {
+		t.Fatalf("discoverableUser: %v", err)
+	}
+	javaUser, ok := user.(javaUser)
+	if !ok {
+		t.Fatalf("user type = %T", user)
+	}
+	if javaUser.account != "matt" {
+		t.Fatalf("account = %q", javaUser.account)
+	}
+}
+
+func TestDiscoverableUserRejectsUnsafeOrUnownedCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		rawID      []byte
+		userHandle []byte
+		java       *fakeJava
+	}{
+		{
+			name:       "blank-user-handle",
+			rawID:      []byte("cred"),
+			userHandle: nil,
+			java:       &fakeJava{},
+		},
+		{
+			name:       "unsafe-user-handle",
+			rawID:      []byte("cred"),
+			userHandle: []byte("../bad"),
+			java:       &fakeJava{},
+		},
+		{
+			name:       "java-rejected",
+			rawID:      []byte("cred"),
+			userHandle: []byte("matt"),
+			java:       &fakeJava{lookupErr: javawire.ErrRejected},
+		},
+		{
+			name:       "credential-not-owned",
+			rawID:      []byte("other"),
+			userHandle: []byte("matt"),
+			java: &fakeJava{credentials: []javawire.Credential{{
+				Active:       true,
+				CredentialID: "Y3JlZA",
+			}}},
+		},
+		{
+			name:       "inactive-credential",
+			rawID:      []byte("cred"),
+			userHandle: []byte("matt"),
+			java: &fakeJava{credentials: []javawire.Credential{{
+				Active:       false,
+				CredentialID: "Y3JlZA",
+			}}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := testWebAuthnService(t, tc.java)
+			if _, err := service.discoverableUser(context.Background(), tc.rawID, tc.userHandle); err == nil {
+				t.Fatal("discoverableUser accepted invalid credential")
+			}
+		})
 	}
 }
 

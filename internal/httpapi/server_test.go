@@ -180,6 +180,27 @@ func TestAuthRouteAddsCORSHeadersForConfiguredOrigin(t *testing.T) {
 	}
 }
 
+func TestLoginOptionsAcceptsDiscoverableRequestWithoutAccount(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/login/options", strings.NewReader(`{}`))
+	req.Header.Set("Origin", config.DefaultPublicOrigin)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	testServer(t).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response json: %v", err)
+	}
+	if body["loginId"] == "" || body["publicKey"] == nil {
+		t.Fatalf("body = %+v", body)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != config.DefaultPublicOrigin {
+		t.Fatalf("Access-Control-Allow-Origin = %q", got)
+	}
+}
+
 func TestAuthPreflightRejectsUnknownOrigin(t *testing.T) {
 	req := httptest.NewRequest(http.MethodOptions, "/auth/passkey/login/options", nil)
 	req.Header.Set("Origin", "https://evil.example")

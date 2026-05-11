@@ -130,12 +130,6 @@ func TestSecurityHTTPAuthRejectsSchemaConfusion(t *testing.T) {
 			want:  http.StatusBadRequest,
 		},
 		{
-			name:  "login-options-missing-account",
-			route: securityRoute{method: http.MethodPost, path: "/auth/passkey/login/options"},
-			body:  `{}`,
-			want:  http.StatusBadRequest,
-		},
-		{
 			name:  "register-options-unknown-field",
 			route: securityRoute{method: http.MethodPost, path: "/auth/passkey/register/options"},
 			body:  `{"pairingToken":"pair","label":"iphone","admin":true}`,
