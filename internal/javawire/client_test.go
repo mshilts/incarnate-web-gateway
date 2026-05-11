@@ -69,6 +69,29 @@ func TestClientSkipsJavaStartupFramesBeforeGatewayResult(t *testing.T) {
 	}
 }
 
+func TestClientClaimPairingSignsAndParsesJavaResponse(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	client, requests := fakeJavaClient(t, secret, func(req map[string]any) map[string]any {
+		return map[string]any{
+			"type":     "gateway_pairing_claim_result",
+			"ok":       true,
+			"accepted": true,
+			"account":  "matt",
+		}
+	})
+	result, err := client.ClaimPairing(context.Background(), "opaque-token")
+	if err != nil {
+		t.Fatalf("ClaimPairing: %v", err)
+	}
+	if result.Account != "matt" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	req := <-requests
+	if req["type"] != "gateway_pairing_claim" || req["pairingToken"] != "opaque-token" || req["signature"] == "" {
+		t.Fatalf("request was not signed correctly: %+v", req)
+	}
+}
+
 func TestClientFailsClosedOnMismatchedTypeRejectedAndOversize(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
 	for _, tc := range []struct {

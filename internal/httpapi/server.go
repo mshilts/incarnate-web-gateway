@@ -62,13 +62,23 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 		},
 	}
 	passkeyService, err := passkeys.NewWebAuthnService(passkeys.ServiceConfig{
-		RPID:           cfg.RPID,
-		RPName:         cfg.RPName,
-		AllowedOrigins: cfg.AllowedOrigins,
-		TTL:            5 * time.Minute,
+		RPID:                     cfg.RPID,
+		RPName:                   cfg.RPName,
+		AllowedOrigins:           cfg.AllowedOrigins,
+		TTL:                      5 * time.Minute,
+		AllowLocalAccountPairing: cfg.AllowLocalAccountPairing,
 	}, javaClient)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.PlayStaticDir != "" {
+		info, err := os.Stat(cfg.PlayStaticDir)
+		if err != nil {
+			return nil, fmt.Errorf("stat play static dir: %w", err)
+		}
+		if !info.IsDir() {
+			return nil, errors.New("play static dir must be a directory")
+		}
 	}
 	return &Server{
 		cfg:       cfg,
@@ -94,6 +104,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("OPTIONS /auth/passkey/register/verify", s.authPreflight)
 	mux.HandleFunc("POST /auth/passkey/register/verify", s.registerVerify)
 	mux.HandleFunc("GET /play/ws", s.playWS)
+	if s.cfg.PlayStaticDir != "" {
+		mux.HandleFunc("GET /play", s.playStaticRedirect)
+		mux.Handle("GET /play/", http.StripPrefix("/play/", http.FileServer(http.Dir(s.cfg.PlayStaticDir))))
+	}
 	return http.MaxBytesHandler(mux, s.cfg.MaxBodyBytes)
 }
 
@@ -287,6 +301,10 @@ func (s *Server) playWS(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit.Event(r.Context(), "play_ws_proxy_closed", "error", err.Error())
 	_ = wsConn.Close(websocket.StatusPolicyViolation, "proxy violation")
+}
+
+func (s *Server) playStaticRedirect(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/play/", http.StatusMovedPermanently)
 }
 
 func (s *Server) requireOrigin(w http.ResponseWriter, r *http.Request) bool {

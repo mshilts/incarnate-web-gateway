@@ -24,6 +24,7 @@ var (
 )
 
 type JavaClient interface {
+	ClaimPairing(context.Context, string) (javawire.PairingClaimResult, error)
 	LookupPasskeys(context.Context, string) (javawire.LookupResult, error)
 	RegisterPasskey(context.Context, string, string, javawire.Credential) (javawire.RegisterResult, error)
 	UpdateCounter(context.Context, string, string, uint32) (javawire.CounterResult, error)
@@ -62,17 +63,19 @@ type Service interface {
 }
 
 type ServiceConfig struct {
-	RPID           string
-	RPName         string
-	AllowedOrigins []string
-	TTL            time.Duration
+	RPID                     string
+	RPName                   string
+	AllowedOrigins           []string
+	TTL                      time.Duration
+	AllowLocalAccountPairing bool
 }
 
 type WebAuthnService struct {
-	webAuthn *webauthnlib.WebAuthn
-	java     JavaClient
-	ttl      time.Duration
-	now      func() time.Time
+	webAuthn                 *webauthnlib.WebAuthn
+	java                     JavaClient
+	ttl                      time.Duration
+	allowLocalAccountPairing bool
+	now                      func() time.Time
 
 	mu            sync.Mutex
 	loginPending  map[string]loginCeremony
@@ -111,12 +114,13 @@ func NewWebAuthnService(cfg ServiceConfig, java JavaClient) (*WebAuthnService, e
 		return nil, err
 	}
 	return &WebAuthnService{
-		webAuthn:     webAuthn,
-		java:         java,
-		ttl:          cfg.TTL,
-		now:          time.Now,
-		loginPending: make(map[string]loginCeremony),
-		regPending:   make(map[string]registrationCeremony),
+		webAuthn:                 webAuthn,
+		java:                     java,
+		ttl:                      cfg.TTL,
+		allowLocalAccountPairing: cfg.AllowLocalAccountPairing,
+		now:                      time.Now,
+		loginPending:             make(map[string]loginCeremony),
+		regPending:               make(map[string]registrationCeremony),
 	}, nil
 }
 
@@ -179,7 +183,10 @@ func (s *WebAuthnService) LoginVerify(ctx context.Context, req LoginVerifyReques
 }
 
 func (s *WebAuthnService) RegistrationOptions(ctx context.Context, req RegistrationOptionsRequest) (map[string]any, error) {
-	account := registrationAccount(req)
+	account, err := s.registrationAccount(ctx, req.PairingToken)
+	if err != nil {
+		return nil, err
+	}
 	label := strings.TrimSpace(req.Label)
 	if account == "" || label == "" {
 		return nil, ErrRejected
@@ -343,12 +350,27 @@ type ioReadCloser struct {
 
 func (c ioReadCloser) Close() error { return nil }
 
-func registrationAccount(req RegistrationOptionsRequest) string {
-	token := strings.TrimSpace(req.PairingToken)
-	if strings.HasPrefix(token, "account:") {
-		return strings.TrimSpace(strings.TrimPrefix(token, "account:"))
+func (s *WebAuthnService) registrationAccount(ctx context.Context, pairingToken string) (string, error) {
+	token := strings.TrimSpace(pairingToken)
+	if token == "" {
+		return "", ErrRejected
 	}
-	return ""
+	if s.allowLocalAccountPairing && strings.HasPrefix(token, "account:") {
+		account := strings.TrimSpace(strings.TrimPrefix(token, "account:"))
+		if account == "" {
+			return "", ErrRejected
+		}
+		return account, nil
+	}
+	claim, err := s.java.ClaimPairing(ctx, token)
+	if err != nil {
+		return "", err
+	}
+	account := strings.TrimSpace(claim.Account)
+	if account == "" {
+		return "", ErrRejected
+	}
+	return account, nil
 }
 
 func labelForCredential(credentials []javawire.Credential, credentialID string) string {

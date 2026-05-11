@@ -15,6 +15,22 @@ The VM should not expose the gateway port publicly. The gateway should bind to
 
 ## Gateway Service
 
+Build the gateway from a clean checkout:
+
+```sh
+make check
+mkdir -p dist
+make build BUILD_OUTPUT=./dist/incarnate-web-gateway LATENCY_PROBE_OUTPUT=./dist/latency-probe
+```
+
+Build the Incarnate browser client in the Incarnate monorepo, then publish the
+static output to a root-owned directory readable by the gateway service:
+
+```sh
+install -d -o root -g incarnate -m 0755 /srv/incarnate/browser-client
+rsync -a --delete /path/to/incarnate/apps/browser-client/dist/ /srv/incarnate/browser-client/
+```
+
 Install the gateway binary somewhere root-owned:
 
 ```sh
@@ -63,5 +79,7 @@ exposed to those ranges.
 - the systemd unit allows only loopback network traffic for the gateway process
 - auth routes reject wrong origins
 - auth rate limits use distinct browser IPs through `CF-Connecting-IP`
+- `/play/` serves the browser client static app
 - `/play/ws` rejects missing sessions
+- passkey registration uses opaque pairing tokens claimed by Java
 - logs contain audit events but no secrets

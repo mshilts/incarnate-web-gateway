@@ -17,6 +17,8 @@ config parser.
 | `INCARNATE_GATEWAY_HMAC_SECRET` | empty | Inline gateway-to-Java HMAC secret for local development. |
 | `INCARNATE_GATEWAY_HMAC_SECRET_FILE` | empty | File containing the gateway-to-Java HMAC secret. |
 | `INCARNATE_GATEWAY_SESSION_SECRET_FILE` | empty | Reserved for encrypted/signed session material. |
+| `INCARNATE_GATEWAY_PLAY_STATIC_DIR` | empty | Directory served as the browser client static app under `/play/`. |
+| `INCARNATE_GATEWAY_ALLOW_LOCAL_ACCOUNT_PAIRING` | `false` | Local-dev-only escape hatch for `pairingToken=account:<name>`. Keep false in production. |
 | `INCARNATE_GATEWAY_LOG_LEVEL` | `info` | Logging level hook. |
 | `INCARNATE_GATEWAY_SESSION_COOKIE_NAME` | `incarnate_gateway_session` | Browser session cookie name. |
 | `INCARNATE_GATEWAY_COOKIE_SECURE` | `true` for HTTPS origins, `false` for HTTP origins | Whether browser session cookies use the `Secure` flag. Set explicitly for localhost/prod. |
@@ -88,12 +90,32 @@ one current secret from `INCARNATE_GATEWAY_HMAC_SECRET` or
 `INCARNATE_GATEWAY_HMAC_SECRET_FILE`; add previous-secret gateway support before
 rotating production traffic without a restart window.
 
+## Browser Client Static App
+
+Set `INCARNATE_GATEWAY_PLAY_STATIC_DIR` to the built browser client directory.
+When configured, the gateway serves that directory under `/play/` and redirects
+`/play` to `/play/`. When unset, the gateway does not serve static browser
+assets.
+
+The static directory must exist at gateway startup. Keep it root-owned or owned
+by the deploy user, and readable by the `incarnate-gateway` service account.
+
+Example:
+
+```text
+INCARNATE_GATEWAY_PLAY_STATIC_DIR=/srv/incarnate/browser-client
+```
+
+`/play/ws` remains the authenticated WebSocket route and is not served from the
+static directory.
+
 ## Local Incarnate Test Environment
 
 For a local browser-native path against the Incarnate Java AI socket, run Java
-with the same gateway ID and HMAC secret that the Go gateway uses. The gateway
-registration route currently needs a local account token because Java does not
-yet expose `gateway_pairing_claim`:
+with the same gateway ID and HMAC secret that the Go gateway uses. Production
+registration uses opaque pairing tokens claimed by Java through
+`gateway_pairing_claim`. The `account:<accountName>` shortcut is disabled by
+default and must be explicitly enabled for local-only end-to-end testing:
 
 ```text
 INCARNATE_GATEWAY_PUBLIC_ORIGIN=http://localhost:8789
@@ -104,8 +126,10 @@ INCARNATE_GATEWAY_JAVA_HOST=127.0.0.1
 INCARNATE_GATEWAY_JAVA_PORT=8083
 INCARNATE_GATEWAY_ID=dev-play-gateway-1
 INCARNATE_GATEWAY_HMAC_SECRET=<same-32-byte-or-longer-secret-as-java>
+INCARNATE_GATEWAY_PLAY_STATIC_DIR=/path/to/incarnate/apps/browser-client/dist
+INCARNATE_GATEWAY_ALLOW_LOCAL_ACCOUNT_PAIRING=true
 ```
 
-Use `pairingToken=account:<accountName>` only for local end-to-end testing.
-Opaque pairing tokens should remain rejected until Java owns pairing-token
-creation and claim.
+Use `pairingToken=account:<accountName>` only for local end-to-end testing. Do
+not set `INCARNATE_GATEWAY_ALLOW_LOCAL_ACCOUNT_PAIRING=true` in production
+systemd units.

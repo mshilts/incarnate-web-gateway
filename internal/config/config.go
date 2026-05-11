@@ -36,28 +36,30 @@ func DefaultTrustedProxyCIDRs() []string {
 }
 
 type Config struct {
-	Bind              string
-	PublicOrigin      string
-	AllowedOrigins    []string
-	RPID              string
-	RPName            string
-	JavaHost          string
-	JavaPort          int
-	GatewayID         string
-	HMACSecret        string
-	HMACSecretFile    string
-	SessionSecretFile string
-	LogLevel          string
-	SessionCookieName string
-	CookieSecure      bool
-	SessionTTL        time.Duration
-	SessionIdleTTL    time.Duration
-	JavaTimeout       time.Duration
-	MaxBodyBytes      int64
-	MaxFrameBytes     int64
-	MaxHeaderBytes    int
-	ClientIPHeader    string
-	TrustedProxyCIDRs []string
+	Bind                     string
+	PublicOrigin             string
+	AllowedOrigins           []string
+	RPID                     string
+	RPName                   string
+	JavaHost                 string
+	JavaPort                 int
+	GatewayID                string
+	HMACSecret               string
+	HMACSecretFile           string
+	SessionSecretFile        string
+	PlayStaticDir            string
+	LogLevel                 string
+	SessionCookieName        string
+	CookieSecure             bool
+	AllowLocalAccountPairing bool
+	SessionTTL               time.Duration
+	SessionIdleTTL           time.Duration
+	JavaTimeout              time.Duration
+	MaxBodyBytes             int64
+	MaxFrameBytes            int64
+	MaxHeaderBytes           int
+	ClientIPHeader           string
+	TrustedProxyCIDRs        []string
 }
 
 func FromEnv() (Config, error) {
@@ -82,6 +84,10 @@ func FromEnv() (Config, error) {
 	if err != nil {
 		errs = append(errs, err)
 	}
+	allowLocalAccountPairing, err := getenvBool("INCARNATE_GATEWAY_ALLOW_LOCAL_ACCOUNT_PAIRING", false)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	maxBodyBytes, err := getenvInt("INCARNATE_GATEWAY_MAX_BODY_BYTES", int(DefaultMaxBodyBytes))
 	if err != nil {
 		errs = append(errs, err)
@@ -95,28 +101,30 @@ func FromEnv() (Config, error) {
 		errs = append(errs, err)
 	}
 	cfg := Config{
-		Bind:              getenv("INCARNATE_GATEWAY_BIND", DefaultBind),
-		PublicOrigin:      getenv("INCARNATE_GATEWAY_PUBLIC_ORIGIN", DefaultPublicOrigin),
-		AllowedOrigins:    splitCSV(getenv("INCARNATE_GATEWAY_ALLOWED_ORIGINS", DefaultPublicOrigin)),
-		RPID:              getenv("INCARNATE_GATEWAY_RP_ID", DefaultRPID),
-		RPName:            getenv("INCARNATE_GATEWAY_RP_NAME", DefaultRPName),
-		JavaHost:          getenv("INCARNATE_GATEWAY_JAVA_HOST", DefaultJavaHost),
-		JavaPort:          javaPort,
-		GatewayID:         getenv("INCARNATE_GATEWAY_ID", DefaultGatewayID),
-		HMACSecret:        os.Getenv("INCARNATE_GATEWAY_HMAC_SECRET"),
-		HMACSecretFile:    os.Getenv("INCARNATE_GATEWAY_HMAC_SECRET_FILE"),
-		SessionSecretFile: os.Getenv("INCARNATE_GATEWAY_SESSION_SECRET_FILE"),
-		LogLevel:          getenv("INCARNATE_GATEWAY_LOG_LEVEL", "info"),
-		SessionCookieName: getenv("INCARNATE_GATEWAY_SESSION_COOKIE_NAME", DefaultSessionCookieName),
-		CookieSecure:      cookieSecure,
-		SessionTTL:        sessionTTL,
-		SessionIdleTTL:    sessionIdleTTL,
-		JavaTimeout:       javaTimeout,
-		MaxBodyBytes:      int64(maxBodyBytes),
-		MaxFrameBytes:     int64(maxFrameBytes),
-		MaxHeaderBytes:    maxHeaderBytes,
-		ClientIPHeader:    getenv("INCARNATE_GATEWAY_CLIENT_IP_HEADER", DefaultClientIPHeader),
-		TrustedProxyCIDRs: getenvCSV("INCARNATE_GATEWAY_TRUSTED_PROXY_CIDRS", DefaultTrustedProxyCIDRs()),
+		Bind:                     getenv("INCARNATE_GATEWAY_BIND", DefaultBind),
+		PublicOrigin:             getenv("INCARNATE_GATEWAY_PUBLIC_ORIGIN", DefaultPublicOrigin),
+		AllowedOrigins:           splitCSV(getenv("INCARNATE_GATEWAY_ALLOWED_ORIGINS", DefaultPublicOrigin)),
+		RPID:                     getenv("INCARNATE_GATEWAY_RP_ID", DefaultRPID),
+		RPName:                   getenv("INCARNATE_GATEWAY_RP_NAME", DefaultRPName),
+		JavaHost:                 getenv("INCARNATE_GATEWAY_JAVA_HOST", DefaultJavaHost),
+		JavaPort:                 javaPort,
+		GatewayID:                getenv("INCARNATE_GATEWAY_ID", DefaultGatewayID),
+		HMACSecret:               os.Getenv("INCARNATE_GATEWAY_HMAC_SECRET"),
+		HMACSecretFile:           os.Getenv("INCARNATE_GATEWAY_HMAC_SECRET_FILE"),
+		SessionSecretFile:        os.Getenv("INCARNATE_GATEWAY_SESSION_SECRET_FILE"),
+		PlayStaticDir:            strings.TrimSpace(os.Getenv("INCARNATE_GATEWAY_PLAY_STATIC_DIR")),
+		LogLevel:                 getenv("INCARNATE_GATEWAY_LOG_LEVEL", "info"),
+		SessionCookieName:        getenv("INCARNATE_GATEWAY_SESSION_COOKIE_NAME", DefaultSessionCookieName),
+		CookieSecure:             cookieSecure,
+		AllowLocalAccountPairing: allowLocalAccountPairing,
+		SessionTTL:               sessionTTL,
+		SessionIdleTTL:           sessionIdleTTL,
+		JavaTimeout:              javaTimeout,
+		MaxBodyBytes:             int64(maxBodyBytes),
+		MaxFrameBytes:            int64(maxFrameBytes),
+		MaxHeaderBytes:           maxHeaderBytes,
+		ClientIPHeader:           getenv("INCARNATE_GATEWAY_CLIENT_IP_HEADER", DefaultClientIPHeader),
+		TrustedProxyCIDRs:        getenvCSV("INCARNATE_GATEWAY_TRUSTED_PROXY_CIDRS", DefaultTrustedProxyCIDRs()),
 	}
 	if err := cfg.Validate(); err != nil {
 		errs = append(errs, err)
@@ -154,6 +162,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.GatewayID) == "" {
 		errs = append(errs, errors.New("gateway id is required"))
+	}
+	if c.PlayStaticDir != strings.TrimSpace(c.PlayStaticDir) {
+		errs = append(errs, errors.New("play static dir must not be padded"))
 	}
 	if c.SessionTTL <= 0 || c.SessionIdleTTL <= 0 {
 		errs = append(errs, errors.New("session ttl and idle ttl must be positive"))

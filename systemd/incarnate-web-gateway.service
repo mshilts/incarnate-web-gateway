@@ -22,6 +22,7 @@ Environment=INCARNATE_GATEWAY_JAVA_PORT=8083
 Environment=INCARNATE_GATEWAY_ID=prod-play-gateway-1
 Environment=INCARNATE_GATEWAY_HMAC_SECRET_FILE=/etc/incarnate/web-gateway.hmac
 Environment=INCARNATE_GATEWAY_SESSION_SECRET_FILE=/etc/incarnate/web-gateway.session
+Environment=INCARNATE_GATEWAY_PLAY_STATIC_DIR=/srv/incarnate/browser-client
 Environment=INCARNATE_GATEWAY_LOG_LEVEL=info
 
 AmbientCapabilities=

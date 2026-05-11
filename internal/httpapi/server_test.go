@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,15 @@ import (
 
 func testServer(t *testing.T) *Server {
 	t.Helper()
-	server, err := NewServer(config.Config{
+	server, err := NewServer(testConfig(), nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	return server
+}
+
+func testConfig() config.Config {
+	return config.Config{
 		Bind:              config.DefaultBind,
 		PublicOrigin:      config.DefaultPublicOrigin,
 		AllowedOrigins:    []string{config.DefaultPublicOrigin},
@@ -38,11 +47,7 @@ func testServer(t *testing.T) *Server {
 		MaxHeaderBytes:    1024,
 		ClientIPHeader:    config.DefaultClientIPHeader,
 		TrustedProxyCIDRs: config.DefaultTrustedProxyCIDRs(),
-	}, nil)
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
 	}
-	return server
 }
 
 func TestHealthz(t *testing.T) {
@@ -58,6 +63,56 @@ func TestHTTPServerUsesConfiguredHeaderLimit(t *testing.T) {
 	server := testServer(t).HTTPServer()
 	if server.MaxHeaderBytes != 1024 {
 		t.Fatalf("MaxHeaderBytes = %d", server.MaxHeaderBytes)
+	}
+}
+
+func TestPlayStaticServesConfiguredDirectory(t *testing.T) {
+	staticDir := t.TempDir()
+	if err := os.WriteFile(staticDir+"/index.html", []byte("<!doctype html><title>Incarnate</title>"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg := testConfig()
+	cfg.PlayStaticDir = staticDir
+	server, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/play/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Incarnate") {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+}
+
+func TestPlayStaticRedirectsBarePlayPath(t *testing.T) {
+	cfg := testConfig()
+	cfg.PlayStaticDir = t.TempDir()
+	server, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/play", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/play/" {
+		t.Fatalf("Location = %q", got)
+	}
+}
+
+func TestPlayStaticDirMustExist(t *testing.T) {
+	cfg := testConfig()
+	cfg.PlayStaticDir = t.TempDir() + "/missing"
+	if _, err := NewServer(cfg, nil); err == nil {
+		t.Fatal("NewServer accepted missing PlayStaticDir")
 	}
 }
 

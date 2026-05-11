@@ -9,6 +9,8 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("INCARNATE_GATEWAY_BIND", "127.0.0.1:9000")
 	t.Setenv("INCARNATE_GATEWAY_ALLOWED_ORIGINS", "https://play.inc-realm.com,http://127.0.0.1:5173")
 	t.Setenv("INCARNATE_GATEWAY_RP_ID", "inc-realm.com")
+	t.Setenv("INCARNATE_GATEWAY_PLAY_STATIC_DIR", "/srv/incarnate/browser-client")
+	t.Setenv("INCARNATE_GATEWAY_ALLOW_LOCAL_ACCOUNT_PAIRING", "true")
 
 	cfg, err := FromEnv()
 	if err != nil {
@@ -28,6 +30,22 @@ func TestConfigFromEnv(t *testing.T) {
 	}
 	if len(cfg.TrustedProxyCIDRs) != len(DefaultTrustedProxyCIDRs()) {
 		t.Fatalf("TrustedProxyCIDRs length = %d", len(cfg.TrustedProxyCIDRs))
+	}
+	if cfg.PlayStaticDir != "/srv/incarnate/browser-client" {
+		t.Fatalf("PlayStaticDir = %q", cfg.PlayStaticDir)
+	}
+	if !cfg.AllowLocalAccountPairing {
+		t.Fatal("AllowLocalAccountPairing = false")
+	}
+}
+
+func TestConfigDefaultsDisableLocalAccountPairing(t *testing.T) {
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv returned error: %v", err)
+	}
+	if cfg.AllowLocalAccountPairing {
+		t.Fatal("AllowLocalAccountPairing defaulted to true")
 	}
 }
 
@@ -134,6 +152,14 @@ func TestConfigRejectsInvalidClientIPTrustConfig(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsPaddedPlayStaticDir(t *testing.T) {
+	cfg := validTestConfig()
+	cfg.PlayStaticDir = " /srv/incarnate/browser-client"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted padded play static dir")
+	}
+}
+
 func TestOriginAllowlist(t *testing.T) {
 	allowlist, err := NewOriginAllowlist([]string{"https://play.inc-realm.com"})
 	if err != nil {
@@ -164,6 +190,7 @@ func validTestConfig() Config {
 		JavaPort:          DefaultJavaPort,
 		GatewayID:         DefaultGatewayID,
 		HMACSecret:        "0123456789abcdef0123456789abcdef",
+		PlayStaticDir:     "",
 		CookieSecure:      true,
 		SessionTTL:        1,
 		SessionIdleTTL:    1,

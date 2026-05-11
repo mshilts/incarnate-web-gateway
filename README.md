@@ -4,10 +4,11 @@
 It is a small Go service that will sit between `https://play.inc-realm.com` and
 the private Java AI socket on the game VM.
 
-Status: local end-to-end implementation slice. It compiles, has focused
+Status: production-readiness implementation slice. It compiles, has focused
 security-oriented unit tests, implements WebAuthn login/registration ceremony
 state, signs Java gateway-control commands, issues server-side session cookies,
-and proxies authenticated browser WebSockets to the private Java AI socket.
+serves the browser client under `/play/`, and proxies authenticated browser
+WebSockets to the private Java AI socket.
 
 ## Why This Exists
 
@@ -65,11 +66,10 @@ Passkeys are the intended browser credential. In the full implementation:
 
 Open self-service passkey registration is not part of `v0.1`.
 
-The current Java runtime does not yet expose a `gateway_pairing_claim` command.
-For local end-to-end testing only, registration accepts
-`pairingToken=account:<accountName>` and then asks Java to store the verified
-credential with `gateway_passkey_register`. Opaque pairing tokens fail closed
-until Java owns the pairing-token claim.
+Registration claims opaque pairing tokens through Java with a signed
+`gateway_pairing_claim` command before starting the WebAuthn ceremony. The old
+`pairingToken=account:<accountName>` shortcut is disabled by default and exists
+only for explicitly configured local development.
 
 ## Relationship To `@inc-realm/bridge`
 
@@ -103,7 +103,7 @@ docs/latency.md
 ```sh
 make check
 make bench
-go run ./cmd/incarnate-web-gateway
+make run
 ```
 
 The default bind address is `127.0.0.1:8789`.
@@ -124,6 +124,8 @@ INCARNATE_GATEWAY_ID=prod-play-gateway-1
 INCARNATE_GATEWAY_HMAC_SECRET=change-me-at-least-32-bytes-long
 INCARNATE_GATEWAY_HMAC_SECRET_FILE=/etc/incarnate/web-gateway.hmac
 INCARNATE_GATEWAY_SESSION_SECRET_FILE=/etc/incarnate/web-gateway.session
+INCARNATE_GATEWAY_PLAY_STATIC_DIR=/srv/incarnate/browser-client
+INCARNATE_GATEWAY_ALLOW_LOCAL_ACCOUNT_PAIRING=false
 INCARNATE_GATEWAY_COOKIE_SECURE=true
 INCARNATE_GATEWAY_JAVA_TIMEOUT=10s
 INCARNATE_GATEWAY_LOG_LEVEL=info
@@ -145,13 +147,15 @@ See [docs/configuration.md](docs/configuration.md) for the full list.
 - `POST /auth/passkey/login/verify`
 - `POST /auth/passkey/register/options`
 - `POST /auth/passkey/register/verify`
+- `GET /play/`
 - `GET /play/ws`
 
 The passkey routes require exact configured origins, strict JSON request bodies,
 and Java credential lookup/register commands. `login/verify` sets an opaque
-`HttpOnly` session cookie. `/play/ws` requires that cookie, starts a signed
-`gateway_session_begin` Java session, and proxies bounded JSON frames only after
-Java accepts the session.
+`HttpOnly` session cookie. `/play/` serves the configured static browser client.
+`/play/ws` requires the session cookie, starts a signed `gateway_session_begin`
+Java session, and proxies bounded JSON frames only after Java accepts the
+session.
 
 ## Release
 

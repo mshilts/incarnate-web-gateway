@@ -3,7 +3,7 @@ PKGS := ./...
 BUILD_OUTPUT ?= /tmp/incarnate-web-gateway-check
 LATENCY_PROBE_OUTPUT ?= /tmp/incarnate-web-gateway-latency-probe
 
-.PHONY: build gateway latency-probe test race vet bench check
+.PHONY: build gateway latency-probe test race vet bench check run
 
 build: gateway latency-probe
 
@@ -26,3 +26,6 @@ bench:
 	$(GO) test -run '^$$' -bench=. -benchmem $(PKGS)
 
 check: vet test race build
+
+run:
+	$(GO) run ./cmd/incarnate-web-gateway

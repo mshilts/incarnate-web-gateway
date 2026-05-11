@@ -63,6 +63,14 @@ type RegisterResult struct {
 	Message  string `json:"message,omitempty"`
 }
 
+type PairingClaimResult struct {
+	Type     string `json:"type"`
+	OK       bool   `json:"ok"`
+	Accepted bool   `json:"accepted,omitempty"`
+	Account  string `json:"account"`
+	Message  string `json:"message,omitempty"`
+}
+
 type SessionResult struct {
 	Type            string `json:"type"`
 	OK              bool   `json:"ok"`
@@ -105,6 +113,20 @@ func (c Client) RegisterPasskey(ctx context.Context, account, label string, cred
 	}
 	if result.Account != "" && result.Account != account {
 		return RegisterResult{}, fmt.Errorf("%w: register account mismatch", ErrProtocol)
+	}
+	return result, nil
+}
+
+func (c Client) ClaimPairing(ctx context.Context, token string) (PairingClaimResult, error) {
+	var result PairingClaimResult
+	if err := c.roundTrip(ctx, map[string]any{
+		"type":         "gateway_pairing_claim",
+		"pairingToken": token,
+	}, "gateway_pairing_claim_result", &result); err != nil {
+		return PairingClaimResult{}, err
+	}
+	if strings.TrimSpace(result.Account) == "" {
+		return PairingClaimResult{}, fmt.Errorf("%w: pairing claim returned empty account", ErrProtocol)
 	}
 	return result, nil
 }
