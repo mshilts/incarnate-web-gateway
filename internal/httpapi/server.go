@@ -172,6 +172,7 @@ func (s *Server) loginVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		s.audit.Event(r.Context(), "passkey_login_verify_rejected", "error", err.Error())
 		writeError(w, http.StatusUnauthorized, "login verify rejected")
 		return
 	}
@@ -228,6 +229,7 @@ func (s *Server) registerVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		s.audit.Event(r.Context(), "passkey_registration_verify_rejected", "error", err.Error())
 		writeError(w, http.StatusUnauthorized, "registration verify rejected")
 		return
 	}

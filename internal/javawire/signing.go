@@ -1,6 +1,7 @@
 package javawire
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -77,7 +78,17 @@ func Verify(secret []byte, signed map[string]any) (bool, error) {
 func CanonicalPayload(payload map[string]any) ([]byte, error) {
 	canonical := cloneMap(payload)
 	delete(canonical, "signature")
-	return json.Marshal(canonical)
+	raw, err := json.Marshal(canonical)
+	if err != nil {
+		return nil, err
+	}
+	var normalized any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&normalized); err != nil {
+		return nil, err
+	}
+	return json.Marshal(normalized)
 }
 
 func cloneMap(in map[string]any) map[string]any {

@@ -1,6 +1,7 @@
 package javawire
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,6 +43,32 @@ func TestHMACRejectsShortSecret(t *testing.T) {
 	_, err := (Signer{GatewayID: "gw", Secret: []byte("short")}).Sign(map[string]any{"type": "x"})
 	if err == nil {
 		t.Fatal("Sign accepted short secret")
+	}
+}
+
+func TestCanonicalPayloadSortsNestedStructFields(t *testing.T) {
+	payload := map[string]any{
+		"type":    "gateway_passkey_register",
+		"account": "matt",
+		"credential": Credential{
+			Label:             "phone",
+			Active:            true,
+			CredentialID:      "Y3JlZA",
+			PublicKeyCOSE:     "cHVibGlj",
+			SignCount:         7,
+			Transports:        []string{"internal"},
+			RPID:              "localhost",
+			Origin:            "http://localhost:4174",
+			AllowedCharacters: []string{},
+		},
+	}
+	canonical, err := CanonicalPayload(payload)
+	if err != nil {
+		t.Fatalf("CanonicalPayload: %v", err)
+	}
+	text := string(canonical)
+	if !strings.Contains(text, `"credential":{"active":true,"allowedCharacters":[],"credentialId":"Y3JlZA","label":"phone"`) {
+		t.Fatalf("nested credential fields were not canonicalized: %s", text)
 	}
 }
 
