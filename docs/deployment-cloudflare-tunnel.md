@@ -81,5 +81,6 @@ exposed to those ranges.
 - auth rate limits use distinct browser IPs through `CF-Connecting-IP`
 - `/play/` serves the browser client static app
 - `/play/ws` rejects missing sessions
-- passkey registration uses opaque pairing tokens claimed by Java
+- public passkey signup creates normal accounts through Java
+- paired passkey registration uses opaque pairing tokens claimed by Java
 - logs contain audit events but no secrets

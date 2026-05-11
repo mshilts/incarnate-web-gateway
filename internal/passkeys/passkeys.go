@@ -27,6 +27,7 @@ type JavaClient interface {
 	ClaimPairing(context.Context, string) (javawire.PairingClaimResult, error)
 	LookupPasskeys(context.Context, string) (javawire.LookupResult, error)
 	RegisterPasskey(context.Context, string, string, javawire.Credential) (javawire.RegisterResult, error)
+	SignupPasskey(context.Context, string, string, javawire.Credential) (javawire.RegisterResult, error)
 	UpdateCounter(context.Context, string, string, uint32) (javawire.CounterResult, error)
 }
 
@@ -49,6 +50,16 @@ type RegistrationVerifyRequest struct {
 	Response       json.RawMessage `json:"response"`
 }
 
+type SignupOptionsRequest struct {
+	Account string `json:"account"`
+	Label   string `json:"label"`
+}
+
+type SignupVerifyRequest struct {
+	RegistrationID string          `json:"registrationId"`
+	Response       json.RawMessage `json:"response"`
+}
+
 type AuthenticatedCredential struct {
 	Account         string
 	CredentialID    string
@@ -60,6 +71,8 @@ type Service interface {
 	LoginVerify(context.Context, LoginVerifyRequest) (AuthenticatedCredential, error)
 	RegistrationOptions(context.Context, RegistrationOptionsRequest) (map[string]any, error)
 	RegistrationVerify(context.Context, RegistrationVerifyRequest) (AuthenticatedCredential, error)
+	SignupOptions(context.Context, SignupOptionsRequest) (map[string]any, error)
+	SignupVerify(context.Context, SignupVerifyRequest) (AuthenticatedCredential, error)
 }
 
 type ServiceConfig struct {
@@ -95,6 +108,7 @@ type registrationCeremony struct {
 	Label     string
 	Session   webauthnlib.SessionData
 	ExpiresAt time.Time
+	Signup    bool
 }
 
 func NewWebAuthnService(cfg ServiceConfig, java JavaClient) (*WebAuthnService, error) {
@@ -187,15 +201,36 @@ func (s *WebAuthnService) RegistrationOptions(ctx context.Context, req Registrat
 	if err != nil {
 		return nil, err
 	}
-	label := strings.TrimSpace(req.Label)
-	if account == "" || label == "" {
+	label, err := normalizePasskeyLabel(req.Label)
+	if err != nil || account == "" {
 		return nil, ErrRejected
 	}
 	lookup, err := s.java.LookupPasskeys(ctx, account)
 	if err != nil {
 		return nil, err
 	}
-	user := javaUser{account: account, credentials: lookup.Credentials}
+	return s.beginRegistration(account, label, lookup.Credentials, false)
+}
+
+func (s *WebAuthnService) SignupOptions(ctx context.Context, req SignupOptionsRequest) (map[string]any, error) {
+	account, err := normalizeSignupAccount(req.Account)
+	if err != nil {
+		return nil, ErrRejected
+	}
+	label, err := normalizePasskeyLabel(req.Label)
+	if err != nil {
+		return nil, ErrRejected
+	}
+	if _, err := s.java.LookupPasskeys(ctx, account); err == nil {
+		return nil, ErrRejected
+	} else if !errors.Is(err, javawire.ErrRejected) {
+		return nil, err
+	}
+	return s.beginRegistration(account, label, nil, true)
+}
+
+func (s *WebAuthnService) beginRegistration(account, label string, credentials []javawire.Credential, signup bool) (map[string]any, error) {
+	user := javaUser{account: account, credentials: credentials}
 	creation, session, err := s.webAuthn.BeginRegistration(user,
 		webauthnlib.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
 			ResidentKey:      protocol.ResidentKeyRequirementPreferred,
@@ -216,6 +251,7 @@ func (s *WebAuthnService) RegistrationOptions(ctx context.Context, req Registrat
 		Label:     label,
 		Session:   *session,
 		ExpiresAt: s.now().Add(s.ttl),
+		Signup:    signup,
 	}
 	s.mu.Unlock()
 	return map[string]any{
@@ -227,15 +263,23 @@ func (s *WebAuthnService) RegistrationOptions(ctx context.Context, req Registrat
 }
 
 func (s *WebAuthnService) RegistrationVerify(ctx context.Context, req RegistrationVerifyRequest) (AuthenticatedCredential, error) {
-	if strings.TrimSpace(req.RegistrationID) == "" || len(req.Response) == 0 {
+	return s.finishRegistration(ctx, req.RegistrationID, req.Response)
+}
+
+func (s *WebAuthnService) SignupVerify(ctx context.Context, req SignupVerifyRequest) (AuthenticatedCredential, error) {
+	return s.finishRegistration(ctx, req.RegistrationID, req.Response)
+}
+
+func (s *WebAuthnService) finishRegistration(ctx context.Context, registrationID string, response json.RawMessage) (AuthenticatedCredential, error) {
+	if strings.TrimSpace(registrationID) == "" || len(response) == 0 {
 		return AuthenticatedCredential{}, ErrRejected
 	}
-	ceremony, err := s.takeRegistration(req.RegistrationID)
+	ceremony, err := s.takeRegistration(registrationID)
 	if err != nil {
 		return AuthenticatedCredential{}, err
 	}
 	user := javaUser{account: ceremony.Account}
-	credential, err := s.webAuthn.FinishRegistration(user, ceremony.Session, rawCredentialRequest(req.Response))
+	credential, err := s.webAuthn.FinishRegistration(user, ceremony.Session, rawCredentialRequest(response))
 	if err != nil {
 		return AuthenticatedCredential{}, err
 	}
@@ -252,7 +296,11 @@ func (s *WebAuthnService) RegistrationVerify(ctx context.Context, req Registrati
 		BackedUp:          credential.Flags.BackupState,
 		AllowedCharacters: []string{},
 	}
-	if _, err := s.java.RegisterPasskey(ctx, ceremony.Account, ceremony.Label, record); err != nil {
+	if ceremony.Signup {
+		if _, err := s.java.SignupPasskey(ctx, ceremony.Account, ceremony.Label, record); err != nil {
+			return AuthenticatedCredential{}, err
+		}
+	} else if _, err := s.java.RegisterPasskey(ctx, ceremony.Account, ceremony.Label, record); err != nil {
 		return AuthenticatedCredential{}, err
 	}
 	return AuthenticatedCredential{Account: ceremony.Account, CredentialID: record.CredentialID, CredentialLabel: ceremony.Label}, nil
@@ -415,4 +463,41 @@ func randomID() (string, error) {
 		return "", err
 	}
 	return javawire.EncodeBase64URL(raw), nil
+}
+
+func normalizeSignupAccount(value string) (string, error) {
+	account := strings.TrimSpace(value)
+	if len(account) < 3 || len(account) > 32 || isReservedSignupAccount(account) {
+		return "", ErrRejected
+	}
+	for _, ch := range account {
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.' {
+			continue
+		}
+		return "", ErrRejected
+	}
+	return account, nil
+}
+
+func normalizePasskeyLabel(value string) (string, error) {
+	label := strings.TrimSpace(value)
+	if len(label) < 1 || len(label) > 48 {
+		return "", ErrRejected
+	}
+	for _, ch := range label {
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.' {
+			continue
+		}
+		return "", ErrRejected
+	}
+	return label, nil
+}
+
+func isReservedSignupAccount(account string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(account))
+	return normalized == "matt" ||
+		normalized == "root" ||
+		normalized == "admin" ||
+		normalized == "sysop" ||
+		strings.HasPrefix(normalized, "ai_pool_")
 }

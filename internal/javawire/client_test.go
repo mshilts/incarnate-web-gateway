@@ -92,6 +92,39 @@ func TestClientClaimPairingSignsAndParsesJavaResponse(t *testing.T) {
 	}
 }
 
+func TestClientSignupPasskeySignsAndParsesJavaResponse(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	client, requests := fakeJavaClient(t, secret, func(req map[string]any) map[string]any {
+		return map[string]any{
+			"type":    "gateway_passkey_signup_result",
+			"ok":      true,
+			"account": req["account"],
+			"label":   req["label"],
+		}
+	})
+	credential := Credential{
+		Label:             "phone",
+		CredentialID:      "Y3JlZA",
+		PublicKeyCOSE:     "cHVibGlj",
+		SignCount:         1,
+		Transports:        []string{"internal"},
+		RPID:              "inc-realm.com",
+		Origin:            "https://play.inc-realm.com",
+		AllowedCharacters: []string{},
+	}
+	result, err := client.SignupPasskey(context.Background(), "new_player", "phone", credential)
+	if err != nil {
+		t.Fatalf("SignupPasskey: %v", err)
+	}
+	if result.Account != "new_player" || result.Label != "phone" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	req := <-requests
+	if req["type"] != "gateway_passkey_signup" || req["account"] != "new_player" || req["signature"] == "" {
+		t.Fatalf("request was not signed correctly: %+v", req)
+	}
+}
+
 func TestClientFailsClosedOnMismatchedTypeRejectedAndOversize(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
 	for _, tc := range []struct {

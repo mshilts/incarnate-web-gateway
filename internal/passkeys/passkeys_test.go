@@ -61,6 +61,50 @@ func TestRegistrationOptionsAcceptsLocalAccountTokenOnlyWhenConfigured(t *testin
 	}
 }
 
+func TestSignupOptionsRejectsExistingAccount(t *testing.T) {
+	service := testWebAuthnService(t, &fakeJava{})
+	_, err := service.SignupOptions(context.Background(), SignupOptionsRequest{
+		Account: "matt",
+		Label:   "iphone",
+	})
+	if !errors.Is(err, ErrRejected) {
+		t.Fatalf("SignupOptions error = %v, want %v", err, ErrRejected)
+	}
+}
+
+func TestSignupOptionsStartsRegistrationForNewNormalAccount(t *testing.T) {
+	java := &fakeJava{lookupErr: javawire.ErrRejected}
+	service := testWebAuthnService(t, java)
+	response, err := service.SignupOptions(context.Background(), SignupOptionsRequest{
+		Account: "new_player",
+		Label:   "phone",
+	})
+	if err != nil {
+		t.Fatalf("SignupOptions: %v", err)
+	}
+	if response["registrationId"] == "" || response["publicKey"] == nil || response["account"] != "new_player" {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+	if java.lookupAccount != "new_player" {
+		t.Fatalf("LookupPasskeys account = %q", java.lookupAccount)
+	}
+}
+
+func TestSignupOptionsRejectsReservedOrUnsafeAccountNames(t *testing.T) {
+	service := testWebAuthnService(t, &fakeJava{lookupErr: javawire.ErrRejected})
+	for _, account := range []string{"admin", "root", "ai_pool_1", "../bad", "ab"} {
+		t.Run(account, func(t *testing.T) {
+			_, err := service.SignupOptions(context.Background(), SignupOptionsRequest{
+				Account: account,
+				Label:   "phone",
+			})
+			if !errors.Is(err, ErrRejected) {
+				t.Fatalf("SignupOptions error = %v, want %v", err, ErrRejected)
+			}
+		})
+	}
+}
+
 func TestLoginOptionsUsesJavaCredentialLookup(t *testing.T) {
 	service := testWebAuthnService(t, &fakeJava{credentials: []javawire.Credential{{
 		Label:             "iphone",
@@ -99,10 +143,12 @@ func testWebAuthnService(t *testing.T, java *fakeJava, options ...func(*ServiceC
 }
 
 type fakeJava struct {
-	credentials  []javawire.Credential
-	claimAccount string
-	claimErr     error
-	claimedToken string
+	credentials   []javawire.Credential
+	claimAccount  string
+	claimErr      error
+	claimedToken  string
+	lookupErr     error
+	lookupAccount string
 }
 
 func (f *fakeJava) ClaimPairing(_ context.Context, token string) (javawire.PairingClaimResult, error) {
@@ -117,12 +163,20 @@ func (f *fakeJava) ClaimPairing(_ context.Context, token string) (javawire.Pairi
 	return javawire.PairingClaimResult{Type: "gateway_pairing_claim_result", OK: true, Account: account}, nil
 }
 
-func (f *fakeJava) LookupPasskeys(context.Context, string) (javawire.LookupResult, error) {
-	return javawire.LookupResult{Type: "gateway_passkey_lookup_result", OK: true, Account: "matt", Credentials: f.credentials}, nil
+func (f *fakeJava) LookupPasskeys(_ context.Context, account string) (javawire.LookupResult, error) {
+	f.lookupAccount = account
+	if f.lookupErr != nil {
+		return javawire.LookupResult{}, f.lookupErr
+	}
+	return javawire.LookupResult{Type: "gateway_passkey_lookup_result", OK: true, Account: account, Credentials: f.credentials}, nil
 }
 
 func (f *fakeJava) RegisterPasskey(context.Context, string, string, javawire.Credential) (javawire.RegisterResult, error) {
 	return javawire.RegisterResult{Type: "gateway_passkey_register_result", OK: true, Account: "matt", Label: "iphone"}, nil
+}
+
+func (f *fakeJava) SignupPasskey(_ context.Context, account, label string, _ javawire.Credential) (javawire.RegisterResult, error) {
+	return javawire.RegisterResult{Type: "gateway_passkey_signup_result", OK: true, Account: account, Label: label}, nil
 }
 
 func (f *fakeJava) UpdateCounter(context.Context, string, string, uint32) (javawire.CounterResult, error) {

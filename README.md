@@ -54,17 +54,20 @@ character allowlists, roster state, and every gameplay command.
 
 ## Passkeys
 
-Passkeys are the intended browser credential. In the full implementation:
+Passkeys are the intended browser credential. There are two registration paths:
 
-1. A trusted bridge or operator session creates a short-lived pairing token.
-2. The browser uses that token to start WebAuthn registration.
-3. The gateway verifies the passkey ceremony.
-4. The gateway asks Java, over a local HMAC-protected command, to store the
-   credential on the Incarnate account.
-5. Login creates a short-lived opaque browser session.
+1. New normal browser players create an account and first passkey through the
+   public signup ceremony.
+2. Existing non-god accounts can add another passkey with a short-lived pairing
+   token minted from a trusted bridge session.
+3. The gateway verifies the WebAuthn ceremony.
+4. The gateway asks Java, over a local HMAC-protected command, to create/store
+   the account or credential.
+5. Login or signup creates a short-lived opaque browser session.
 6. `/play/ws` opens only after origin and session checks pass.
 
-Open self-service passkey registration is not part of `v0.1`.
+God/admin accounts are not eligible for passkey login or registration; they use
+the PKI bridge path.
 
 Registration claims opaque pairing tokens through Java with a signed
 `gateway_pairing_claim` command before starting the WebAuthn ceremony. The old
@@ -147,6 +150,8 @@ See [docs/configuration.md](docs/configuration.md) for the full list.
 - `POST /auth/passkey/login/verify`
 - `POST /auth/passkey/register/options`
 - `POST /auth/passkey/register/verify`
+- `POST /auth/passkey/signup/options`
+- `POST /auth/passkey/signup/verify`
 - `GET /play/`
 - `GET /play/ws`
 

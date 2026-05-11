@@ -103,6 +103,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /auth/passkey/register/options", s.registerOptions)
 	mux.HandleFunc("OPTIONS /auth/passkey/register/verify", s.authPreflight)
 	mux.HandleFunc("POST /auth/passkey/register/verify", s.registerVerify)
+	mux.HandleFunc("OPTIONS /auth/passkey/signup/options", s.authPreflight)
+	mux.HandleFunc("POST /auth/passkey/signup/options", s.signupOptions)
+	mux.HandleFunc("OPTIONS /auth/passkey/signup/verify", s.authPreflight)
+	mux.HandleFunc("POST /auth/passkey/signup/verify", s.signupVerify)
 	mux.HandleFunc("GET /play/ws", s.playWS)
 	if s.cfg.PlayStaticDir != "" {
 		mux.HandleFunc("GET /play", s.playStaticRedirect)
@@ -249,6 +253,63 @@ func (s *Server) registerVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "account": auth.Account})
+}
+
+func (s *Server) signupOptions(w http.ResponseWriter, r *http.Request) {
+	if !s.requireOrigin(w, r) || !s.requireRateLimit(w, r, "signup-options") {
+		return
+	}
+	if !requireJSONContentType(w, r) {
+		return
+	}
+	var req passkeys.SignupOptionsRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Account == "" || req.Label == "" {
+		writeError(w, http.StatusBadRequest, "account and label are required")
+		return
+	}
+	response, err := s.passkeys.SignupOptions(r.Context(), req)
+	if errors.Is(err, passkeys.ErrNotImplemented) {
+		writeError(w, http.StatusNotImplemented, "passkey signup options are not implemented")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "signup options rejected")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) signupVerify(w http.ResponseWriter, r *http.Request) {
+	if !s.requireOrigin(w, r) || !s.requireRateLimit(w, r, "signup-verify") {
+		return
+	}
+	if !requireJSONContentType(w, r) {
+		return
+	}
+	var req passkeys.SignupVerifyRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	auth, err := s.passkeys.SignupVerify(r.Context(), req)
+	if errors.Is(err, passkeys.ErrNotImplemented) {
+		writeError(w, http.StatusNotImplemented, "passkey signup verify is not implemented")
+		return
+	}
+	if err != nil {
+		s.audit.Event(r.Context(), "passkey_signup_verify_rejected", "error", err.Error())
+		writeError(w, http.StatusUnauthorized, "signup verify rejected")
+		return
+	}
+	record, err := s.sessions.Create(auth.Account, auth.CredentialID, auth.CredentialLabel)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "session creation failed")
+		return
+	}
+	s.setSessionCookie(w, record)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "account": auth.Account, "wsUrl": "/play/ws"})
 }
 
 func (s *Server) playWS(w http.ResponseWriter, r *http.Request) {

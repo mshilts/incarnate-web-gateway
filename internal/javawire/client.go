@@ -117,6 +117,22 @@ func (c Client) RegisterPasskey(ctx context.Context, account, label string, cred
 	return result, nil
 }
 
+func (c Client) SignupPasskey(ctx context.Context, account, label string, credential Credential) (RegisterResult, error) {
+	var result RegisterResult
+	if err := c.roundTrip(ctx, map[string]any{
+		"type":       "gateway_passkey_signup",
+		"account":    account,
+		"label":      label,
+		"credential": credential,
+	}, "gateway_passkey_signup_result", &result); err != nil {
+		return RegisterResult{}, err
+	}
+	if result.Account != "" && result.Account != account {
+		return RegisterResult{}, fmt.Errorf("%w: signup account mismatch", ErrProtocol)
+	}
+	return result, nil
+}
+
 func (c Client) ClaimPairing(ctx context.Context, token string) (PairingClaimResult, error) {
 	var result PairingClaimResult
 	if err := c.roundTrip(ctx, map[string]any{

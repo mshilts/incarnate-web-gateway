@@ -322,6 +322,29 @@ func TestLoginVerifyIssuesConfiguredSessionCookie(t *testing.T) {
 	}
 }
 
+func TestSignupVerifyIssuesSessionCookie(t *testing.T) {
+	server := testServer(t)
+	server.cfg.CookieSecure = false
+	server.passkeys = fakePasskeyService{
+		signupVerify: passkeys.AuthenticatedCredential{Account: "new_player", CredentialID: "cred", CredentialLabel: "phone"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/signup/verify", strings.NewReader(`{"registrationId":"reg-1","response":{"id":"cred"}}`))
+	req.Header.Set("Origin", config.DefaultPublicOrigin)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != config.DefaultSessionCookieName || cookies[0].Value == "" {
+		t.Fatalf("unexpected cookies: %+v", cookies)
+	}
+	if !strings.Contains(rec.Body.String(), `"account":"new_player"`) || !strings.Contains(rec.Body.String(), `"wsUrl":"/play/ws"`) {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
 func TestPlayWSProxiesAfterJavaSessionBegin(t *testing.T) {
 	server := testServer(t)
 	server.cfg.MaxFrameBytes = 1024
@@ -383,7 +406,8 @@ func TestPlayWSProxiesAfterJavaSessionBegin(t *testing.T) {
 }
 
 type fakePasskeyService struct {
-	loginVerify passkeys.AuthenticatedCredential
+	loginVerify  passkeys.AuthenticatedCredential
+	signupVerify passkeys.AuthenticatedCredential
 }
 
 func (f fakePasskeyService) LoginOptions(context.Context, passkeys.LoginOptionsRequest) (map[string]any, error) {
@@ -400,4 +424,12 @@ func (f fakePasskeyService) RegistrationOptions(context.Context, passkeys.Regist
 
 func (f fakePasskeyService) RegistrationVerify(context.Context, passkeys.RegistrationVerifyRequest) (passkeys.AuthenticatedCredential, error) {
 	return passkeys.AuthenticatedCredential{}, nil
+}
+
+func (f fakePasskeyService) SignupOptions(context.Context, passkeys.SignupOptionsRequest) (map[string]any, error) {
+	return map[string]any{"ok": true}, nil
+}
+
+func (f fakePasskeyService) SignupVerify(context.Context, passkeys.SignupVerifyRequest) (passkeys.AuthenticatedCredential, error) {
+	return f.signupVerify, nil
 }

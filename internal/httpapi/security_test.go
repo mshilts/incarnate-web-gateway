@@ -26,6 +26,8 @@ var securityAuthRoutes = []securityRoute{
 	{name: "login-verify", method: http.MethodPost, path: "/auth/passkey/login/verify", body: `{}`},
 	{name: "register-options", method: http.MethodPost, path: "/auth/passkey/register/options", body: `{"pairingToken":"pair","label":"iphone"}`},
 	{name: "register-verify", method: http.MethodPost, path: "/auth/passkey/register/verify", body: `{}`},
+	{name: "signup-options", method: http.MethodPost, path: "/auth/passkey/signup/options", body: `{"account":"new_player","label":"phone"}`},
+	{name: "signup-verify", method: http.MethodPost, path: "/auth/passkey/signup/verify", body: `{}`},
 }
 
 func TestSecurityHTTPRejectsOriginConfusionOnProtectedRoutes(t *testing.T) {
@@ -148,6 +150,24 @@ func TestSecurityHTTPAuthRejectsSchemaConfusion(t *testing.T) {
 			name:  "register-options-missing-label",
 			route: securityRoute{method: http.MethodPost, path: "/auth/passkey/register/options"},
 			body:  `{"pairingToken":"pair"}`,
+			want:  http.StatusBadRequest,
+		},
+		{
+			name:  "signup-options-unknown-field",
+			route: securityRoute{method: http.MethodPost, path: "/auth/passkey/signup/options"},
+			body:  `{"account":"new_player","label":"phone","admin":true}`,
+			want:  http.StatusBadRequest,
+		},
+		{
+			name:  "signup-options-missing-account",
+			route: securityRoute{method: http.MethodPost, path: "/auth/passkey/signup/options"},
+			body:  `{"label":"phone"}`,
+			want:  http.StatusBadRequest,
+		},
+		{
+			name:  "signup-options-missing-label",
+			route: securityRoute{method: http.MethodPost, path: "/auth/passkey/signup/options"},
+			body:  `{"account":"new_player"}`,
 			want:  http.StatusBadRequest,
 		},
 	}

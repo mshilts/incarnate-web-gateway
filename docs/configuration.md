@@ -112,10 +112,11 @@ static directory.
 ## Local Incarnate Test Environment
 
 For a local browser-native path against the Incarnate Java AI socket, run Java
-with the same gateway ID and HMAC secret that the Go gateway uses. Production
-registration uses opaque pairing tokens claimed by Java through
-`gateway_pairing_claim`. The `account:<accountName>` shortcut is disabled by
-default and must be explicitly enabled for local-only end-to-end testing:
+with the same gateway ID and HMAC secret that the Go gateway uses. Public signup
+creates normal accounts through Java; paired-device registration uses opaque
+pairing tokens claimed by Java through `gateway_pairing_claim`. The
+`account:<accountName>` shortcut is disabled by default and must be explicitly
+enabled for local-only end-to-end testing:
 
 ```text
 INCARNATE_GATEWAY_PUBLIC_ORIGIN=http://localhost:8789
