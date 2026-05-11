@@ -219,28 +219,43 @@ func (c Client) readTyped(reader *bufio.Reader, expectedType string, dst any) er
 	if maxLine <= 0 {
 		maxLine = MaxResponseBytes
 	}
-	line, err := readLineBounded(reader, maxLine)
-	if err != nil {
-		return err
+	for skipped := 0; skipped < 8; skipped++ {
+		line, err := readLineBounded(reader, maxLine)
+		if err != nil {
+			return err
+		}
+		var envelope struct {
+			Type     string `json:"type"`
+			OK       bool   `json:"ok"`
+			Accepted bool   `json:"accepted"`
+		}
+		if err := json.Unmarshal(line, &envelope); err != nil {
+			return fmt.Errorf("%w: invalid json response", ErrProtocol)
+		}
+		if envelope.Type != expectedType {
+			if isSkippableStartupFrame(envelope.Type) {
+				continue
+			}
+			return fmt.Errorf("%w: expected %s got %s", ErrProtocol, expectedType, envelope.Type)
+		}
+		if !envelope.OK && !envelope.Accepted {
+			return ErrRejected
+		}
+		if err := json.Unmarshal(line, dst); err != nil {
+			return fmt.Errorf("%w: invalid typed response", ErrProtocol)
+		}
+		return nil
 	}
-	var envelope struct {
-		Type     string `json:"type"`
-		OK       bool   `json:"ok"`
-		Accepted bool   `json:"accepted"`
+	return fmt.Errorf("%w: expected %s after startup frames", ErrProtocol, expectedType)
+}
+
+func isSkippableStartupFrame(frameType string) bool {
+	switch frameType {
+	case "hello", "prompt", "session_state":
+		return true
+	default:
+		return false
 	}
-	if err := json.Unmarshal(line, &envelope); err != nil {
-		return fmt.Errorf("%w: invalid json response", ErrProtocol)
-	}
-	if envelope.Type != expectedType {
-		return fmt.Errorf("%w: expected %s got %s", ErrProtocol, expectedType, envelope.Type)
-	}
-	if !envelope.OK && !envelope.Accepted {
-		return ErrRejected
-	}
-	if err := json.Unmarshal(line, dst); err != nil {
-		return fmt.Errorf("%w: invalid typed response", ErrProtocol)
-	}
-	return nil
 }
 
 func readLineBounded(reader *bufio.Reader, maxLine int) ([]byte, error) {

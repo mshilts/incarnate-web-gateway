@@ -46,6 +46,29 @@ func TestClientLookupSignsAndParsesJavaResponse(t *testing.T) {
 	}
 }
 
+func TestClientSkipsJavaStartupFramesBeforeGatewayResult(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	client, _ := fakeJavaClientWithResponses(t, secret, func(req map[string]any) []map[string]any {
+		return []map[string]any{
+			{"type": "hello", "message": "Key authentication required."},
+			{"type": "prompt", "promptType": "auth"},
+			{
+				"type":        "gateway_passkey_lookup_result",
+				"ok":          true,
+				"account":     req["account"],
+				"credentials": []map[string]any{},
+			},
+		}
+	})
+	result, err := client.LookupPasskeys(context.Background(), "matt")
+	if err != nil {
+		t.Fatalf("LookupPasskeys: %v", err)
+	}
+	if result.Account != "matt" || len(result.Credentials) != 0 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
 func TestClientFailsClosedOnMismatchedTypeRejectedAndOversize(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
 	for _, tc := range []struct {
@@ -90,6 +113,12 @@ func TestClientFailsClosedOnMismatchedTypeRejectedAndOversize(t *testing.T) {
 }
 
 func fakeJavaClient(t *testing.T, secret []byte, response func(map[string]any) map[string]any) (Client, <-chan map[string]any) {
+	return fakeJavaClientWithResponses(t, secret, func(req map[string]any) []map[string]any {
+		return []map[string]any{response(req)}
+	})
+}
+
+func fakeJavaClientWithResponses(t *testing.T, secret []byte, response func(map[string]any) []map[string]any) (Client, <-chan map[string]any) {
 	t.Helper()
 	requests := make(chan map[string]any, 1)
 	client := Client{
@@ -114,9 +143,11 @@ func fakeJavaClient(t *testing.T, secret []byte, response func(map[string]any) m
 					return
 				}
 				requests <- req
-				encoded, _ := json.Marshal(response(req))
-				encoded = append(encoded, '\n')
-				_, _ = server.Write(encoded)
+				for _, payload := range response(req) {
+					encoded, _ := json.Marshal(payload)
+					encoded = append(encoded, '\n')
+					_, _ = server.Write(encoded)
+				}
 			}()
 			return gateway, nil
 		},
