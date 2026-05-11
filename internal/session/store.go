@@ -69,6 +69,16 @@ func (s *Store) Create(account, credentialID, credentialLabel string) (Record, e
 func (s *Store) Get(id string) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.touchLocked(id)
+}
+
+func (s *Store) Touch(id string) (Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.touchLocked(id)
+}
+
+func (s *Store) touchLocked(id string) (Record, error) {
 	record, ok := s.records[id]
 	if !ok {
 		return Record{}, ErrNotFound

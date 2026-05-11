@@ -59,3 +59,30 @@ func TestSecuritySessionIdleTTLRequiresActivity(t *testing.T) {
 		t.Fatalf("Get idle session error = %v, want %v", err, ErrNotFound)
 	}
 }
+
+func TestSecuritySessionTouchRefreshesIdleButNotAbsoluteTTL(t *testing.T) {
+	now := time.Unix(1000, 0)
+	store := NewStore(30*time.Minute, 10*time.Minute)
+	store.SetClock(func() time.Time { return now })
+	record, err := store.Create("matt", "cred", "iphone")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	now = now.Add(9 * time.Minute)
+	if touched, err := store.Touch(record.ID); err != nil {
+		t.Fatalf("Touch active session: %v", err)
+	} else if !touched.ExpiresAt.Equal(record.ExpiresAt) {
+		t.Fatalf("Touch extended absolute expiry: got %v want %v", touched.ExpiresAt, record.ExpiresAt)
+	}
+
+	now = now.Add(9 * time.Minute)
+	if _, err := store.Get(record.ID); err != nil {
+		t.Fatalf("Get session after refreshed idle window: %v", err)
+	}
+
+	now = record.ExpiresAt
+	if _, err := store.Touch(record.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Touch absolute-expired session error = %v, want %v", err, ErrNotFound)
+	}
+}

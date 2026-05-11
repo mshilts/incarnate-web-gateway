@@ -4,17 +4,20 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mshilts/incarnate-web-gateway/internal/config"
 	"github.com/mshilts/incarnate-web-gateway/internal/javawire"
 	"github.com/mshilts/incarnate-web-gateway/internal/passkeys"
+	"github.com/mshilts/incarnate-web-gateway/internal/session"
 	"nhooyr.io/websocket"
 )
 
@@ -485,6 +488,67 @@ func TestPlayWSProxiesAfterJavaSessionBegin(t *testing.T) {
 	}
 	if messageType != websocket.MessageText || string(data) != `{"type":"ping"}` {
 		t.Fatalf("unexpected websocket echo: type=%v data=%s", messageType, data)
+	}
+}
+
+func TestPlayWSHeartbeatRefreshesSessionIdleTTL(t *testing.T) {
+	originalInterval := browserWebSocketPingInterval
+	originalTimeout := browserWebSocketPingTimeout
+	browserWebSocketPingInterval = 10 * time.Millisecond
+	browserWebSocketPingTimeout = time.Second
+	t.Cleanup(func() {
+		browserWebSocketPingInterval = originalInterval
+		browserWebSocketPingTimeout = originalTimeout
+	})
+
+	server := testServer(t)
+	now := time.Unix(1000, 0)
+	var nowUnixNano atomic.Int64
+	nowUnixNano.Store(now.UnixNano())
+	server.sessions = session.NewStore(time.Hour, 50*time.Millisecond)
+	server.sessions.SetClock(func() time.Time { return time.Unix(0, nowUnixNano.Load()) })
+	record, err := server.sessions.Create("matt", "Y3JlZA", "iphone")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	server.java.Dialer = func(context.Context, string) (net.Conn, error) {
+		javaSide, gatewaySide := net.Pipe()
+		go func() {
+			defer javaSide.Close()
+			reader := bufio.NewReader(javaSide)
+			if _, err := reader.ReadBytes('\n'); err != nil {
+				return
+			}
+			_, _ = javaSide.Write([]byte(`{"type":"gateway_session_result","ok":true,"account":"matt","credentialLabel":"iphone"}` + "\n"))
+			_, _ = io.Copy(io.Discard, reader)
+		}()
+		return gatewaySide, nil
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/play/ws"
+	wsConn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Origin": []string{config.DefaultPublicOrigin},
+			"Cookie": []string{(&http.Cookie{Name: config.DefaultSessionCookieName, Value: record.ID}).String()},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Dial websocket: %v", err)
+	}
+	defer wsConn.Close(websocket.StatusNormalClosure, "")
+	wsConn.CloseRead(ctx)
+
+	now = now.Add(40 * time.Millisecond)
+	nowUnixNano.Store(now.UnixNano())
+	time.Sleep(80 * time.Millisecond)
+	now = now.Add(40 * time.Millisecond)
+	nowUnixNano.Store(now.UnixNano())
+	if _, err := server.sessions.Get(record.ID); err != nil {
+		t.Fatalf("Get session after websocket heartbeat: %v", err)
 	}
 }
 

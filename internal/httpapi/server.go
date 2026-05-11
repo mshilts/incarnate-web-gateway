@@ -26,6 +26,16 @@ import (
 	"nhooyr.io/websocket"
 )
 
+var (
+	errWebSocketHeartbeat      = errors.New("websocket heartbeat failed")
+	errWebSocketSessionExpired = errors.New("websocket session expired")
+)
+
+var (
+	browserWebSocketPingInterval = 25 * time.Second
+	browserWebSocketPingTimeout  = 10 * time.Second
+)
+
 type Server struct {
 	cfg       config.Config
 	origins   config.OriginAllowlist
@@ -419,7 +429,7 @@ func (s *Server) playWS(w http.ResponseWriter, r *http.Request) {
 	defer wsConn.Close(websocket.StatusInternalError, "proxy closed")
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	errc := make(chan error, 2)
+	errc := make(chan error, 3)
 	go func() {
 		errc <- proxyBrowserToJava(ctx, wsConn, javaConn, s.cfg.MaxFrameBytes)
 		cancel()
@@ -428,9 +438,23 @@ func (s *Server) playWS(w http.ResponseWriter, r *http.Request) {
 		errc <- proxyJavaToBrowser(ctx, wsConn, javaReader, s.cfg.MaxFrameBytes)
 		cancel()
 	}()
+	go func() {
+		errc <- s.keepAliveBrowserWebSocket(ctx, wsConn, record.ID)
+		cancel()
+	}()
 	err = <-errc
 	if err == nil || errors.Is(err, context.Canceled) || websocket.CloseStatus(err) == websocket.StatusNormalClosure {
 		_ = wsConn.Close(websocket.StatusNormalClosure, "")
+		return
+	}
+	if errors.Is(err, errWebSocketSessionExpired) {
+		s.audit.Event(r.Context(), "play_ws_proxy_closed", "error", err.Error())
+		_ = wsConn.Close(websocket.StatusPolicyViolation, "session expired")
+		return
+	}
+	if errors.Is(err, errWebSocketHeartbeat) {
+		s.audit.Event(r.Context(), "play_ws_proxy_closed", "error", err.Error())
+		_ = wsConn.Close(websocket.StatusGoingAway, "websocket heartbeat failed")
 		return
 	}
 	s.audit.Event(r.Context(), "play_ws_proxy_closed", "error", err.Error())
@@ -595,6 +619,27 @@ func proxyJavaToBrowser(ctx context.Context, wsConn *websocket.Conn, javaReader 
 		}
 		if err := wsConn.Write(ctx, websocket.MessageText, line); err != nil {
 			return err
+		}
+	}
+}
+
+func (s *Server) keepAliveBrowserWebSocket(ctx context.Context, wsConn *websocket.Conn, sessionID string) error {
+	ticker := time.NewTicker(browserWebSocketPingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, browserWebSocketPingTimeout)
+			err := wsConn.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("%w: %v", errWebSocketHeartbeat, err)
+			}
+			if _, err := s.sessions.Touch(sessionID); err != nil {
+				return fmt.Errorf("%w: %v", errWebSocketSessionExpired, err)
+			}
 		}
 	}
 }
