@@ -84,9 +84,13 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
+	mux.HandleFunc("OPTIONS /auth/passkey/login/options", s.authPreflight)
 	mux.HandleFunc("POST /auth/passkey/login/options", s.loginOptions)
+	mux.HandleFunc("OPTIONS /auth/passkey/login/verify", s.authPreflight)
 	mux.HandleFunc("POST /auth/passkey/login/verify", s.loginVerify)
+	mux.HandleFunc("OPTIONS /auth/passkey/register/options", s.authPreflight)
 	mux.HandleFunc("POST /auth/passkey/register/options", s.registerOptions)
+	mux.HandleFunc("OPTIONS /auth/passkey/register/verify", s.authPreflight)
 	mux.HandleFunc("POST /auth/passkey/register/verify", s.registerVerify)
 	mux.HandleFunc("GET /play/ws", s.playWS)
 	return http.MaxBytesHandler(mux, s.cfg.MaxBodyBytes)
@@ -108,6 +112,20 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func (s *Server) authPreflight(w http.ResponseWriter, r *http.Request) {
+	if !s.requireOrigin(w, r) {
+		return
+	}
+	requestMethod := r.Header.Get("Access-Control-Request-Method")
+	if requestMethod != "" && !strings.EqualFold(requestMethod, http.MethodPost) {
+		writeError(w, http.StatusForbidden, "cors method is not allowed")
+		return
+	}
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "content-type")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) loginOptions(w http.ResponseWriter, r *http.Request) {
@@ -285,7 +303,14 @@ func (s *Server) requireOrigin(w http.ResponseWriter, r *http.Request) bool {
 		writeError(w, http.StatusForbidden, "origin is not allowed")
 		return false
 	}
+	setCORSHeaders(w, origin)
 	return true
+}
+
+func setCORSHeaders(w http.ResponseWriter, origin string) {
+	w.Header().Add("Vary", "Origin")
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
 }
 
 func (s *Server) requireRateLimit(w http.ResponseWriter, r *http.Request, action string) bool {

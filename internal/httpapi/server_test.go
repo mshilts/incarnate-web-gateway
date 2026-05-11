@@ -93,6 +93,51 @@ func TestMultipleOriginsRejected(t *testing.T) {
 	}
 }
 
+func TestAuthPreflightAllowsConfiguredOrigin(t *testing.T) {
+	req := httptest.NewRequest(http.MethodOptions, "/auth/passkey/login/options", nil)
+	req.Header.Set("Origin", config.DefaultPublicOrigin)
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	rec := httptest.NewRecorder()
+	testServer(t).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != config.DefaultPublicOrigin {
+		t.Fatalf("Access-Control-Allow-Origin = %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q", got)
+	}
+}
+
+func TestAuthRouteAddsCORSHeadersForConfiguredOrigin(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/login/options", strings.NewReader(`{"account":"matt"}`))
+	req.Header.Set("Origin", config.DefaultPublicOrigin)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	testServer(t).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != config.DefaultPublicOrigin {
+		t.Fatalf("Access-Control-Allow-Origin = %q", got)
+	}
+}
+
+func TestAuthPreflightRejectsUnknownOrigin(t *testing.T) {
+	req := httptest.NewRequest(http.MethodOptions, "/auth/passkey/login/options", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	rec := httptest.NewRecorder()
+	testServer(t).Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("Access-Control-Allow-Origin = %q", got)
+	}
+}
+
 func TestAuthRoutesRequireJSONContentType(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/login/options", strings.NewReader(`{"account":"matt"}`))
 	req.Header.Set("Origin", config.DefaultPublicOrigin)
