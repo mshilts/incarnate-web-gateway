@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -184,6 +185,101 @@ func TestSecurityHTTPAuthRejectsSchemaConfusion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSecurityHTTPAddsBrowserHardeningHeaders(t *testing.T) {
+	staticDir := t.TempDir()
+	if err := os.WriteFile(staticDir+"/index.html", []byte("<!doctype html><title>Incarnate</title>"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg := testConfig()
+	cfg.PlayStaticDir = staticDir
+	server, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	for _, route := range []securityRoute{
+		{name: "healthz", method: http.MethodGet, path: "/healthz"},
+		{name: "play-static", method: http.MethodGet, path: "/play/"},
+		{name: "auth-rejection", method: http.MethodPost, path: "/auth/passkey/login/options", body: `{"account":"matt"}`},
+		{name: "websocket-rejection", method: http.MethodGet, path: "/play/ws"},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			req := securityRequest(route)
+			if strings.HasPrefix(route.path, "/auth/") || route.path == "/play/ws" {
+				req.Header.Set("Origin", config.DefaultPublicOrigin)
+			}
+			if strings.HasPrefix(route.path, "/auth/") {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, req)
+			assertBrowserHardeningHeaders(t, rec.Header(), true)
+		})
+	}
+}
+
+func TestSecurityHTTPRedirectsPublicHTTPToHTTPS(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://play.inc-realm.com/play/?slot=1", nil)
+	rec := httptest.NewRecorder()
+	testServer(t).Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusPermanentRedirect {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusPermanentRedirect)
+	}
+	if got := rec.Header().Get("Location"); got != "https://play.inc-realm.com/play/?slot=1" {
+		t.Fatalf("Location = %q", got)
+	}
+	assertBrowserHardeningHeaders(t, rec.Header(), true)
+}
+
+func TestSecurityHTTPSRedirectTrustsForwardedProtoOnlyFromTrustedProxy(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		remoteAddr string
+		headerName string
+		header     string
+		want       int
+	}{
+		{name: "trusted-x-forwarded-proto", remoteAddr: "127.0.0.1:1000", headerName: "X-Forwarded-Proto", header: "https", want: http.StatusOK},
+		{name: "trusted-forwarded", remoteAddr: "127.0.0.1:1000", headerName: "Forwarded", header: "for=203.0.113.10;proto=https;host=play.inc-realm.com", want: http.StatusOK},
+		{name: "untrusted-x-forwarded-proto", remoteAddr: "198.51.100.1:1000", headerName: "X-Forwarded-Proto", header: "https", want: http.StatusPermanentRedirect},
+		{name: "ambiguous-x-forwarded-proto", remoteAddr: "127.0.0.1:1000", headerName: "X-Forwarded-Proto", header: "https,http", want: http.StatusPermanentRedirect},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://play.inc-realm.com/healthz", nil)
+			req.RemoteAddr = tc.remoteAddr
+			req.Header.Set(tc.headerName, tc.header)
+			rec := httptest.NewRecorder()
+			testServer(t).Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestSecurityHTTPDevOriginDoesNotRedirectOrSendHSTS(t *testing.T) {
+	cfg := testConfig()
+	cfg.PublicOrigin = "http://127.0.0.1:5173"
+	cfg.AllowedOrigins = []string{cfg.PublicOrigin}
+	cfg.CookieSecure = false
+	server, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:5173/healthz", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Fatalf("Strict-Transport-Security = %q", got)
+	}
+	assertBrowserHardeningHeaders(t, rec.Header(), false)
 }
 
 func TestSecurityHTTPWebSocketRejectsUnauthenticatedOrMalformedUpgrade(t *testing.T) {
@@ -409,4 +505,39 @@ func serveRateLimitedLogin(t *testing.T, server *Server, remoteAddr, cfConnectin
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, req)
 	return rec
+}
+
+func assertBrowserHardeningHeaders(t *testing.T, header http.Header, wantHSTS bool) {
+	t.Helper()
+	if got := header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q", got)
+	}
+	if got := header.Get("Referrer-Policy"); got != "no-referrer" {
+		t.Fatalf("Referrer-Policy = %q", got)
+	}
+	if got := header.Get("X-Frame-Options"); got != "DENY" {
+		t.Fatalf("X-Frame-Options = %q", got)
+	}
+	if got := header.Get("Permissions-Policy"); !strings.Contains(got, "geolocation=()") || !strings.Contains(got, "microphone=()") {
+		t.Fatalf("Permissions-Policy = %q", got)
+	}
+	csp := header.Get("Content-Security-Policy")
+	for _, directive := range []string{
+		"default-src 'self'",
+		"frame-ancestors 'none'",
+		"object-src 'none'",
+		"script-src 'self'",
+		"connect-src 'self'",
+	} {
+		if !strings.Contains(csp, directive) {
+			t.Fatalf("Content-Security-Policy = %q, missing %q", csp, directive)
+		}
+	}
+	hsts := header.Get("Strict-Transport-Security")
+	if wantHSTS && !strings.Contains(hsts, "max-age=31536000") {
+		t.Fatalf("Strict-Transport-Security = %q", hsts)
+	}
+	if !wantHSTS && hsts != "" {
+		t.Fatalf("Strict-Transport-Security = %q", hsts)
+	}
 }

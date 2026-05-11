@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ type Server struct {
 	authLimit *ratelimit.Limiter
 	audit     audit.Logger
 	proxies   []netip.Prefix
+	publicURL *url.URL
 }
 
 func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
@@ -47,6 +49,10 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 	proxies, err := parseProxyCIDRs(cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return nil, err
+	}
+	publicURL, err := url.Parse(cfg.PublicOrigin)
+	if err != nil {
+		return nil, fmt.Errorf("parse public origin: %w", err)
 	}
 	secret, err := loadHMACSecret(cfg)
 	if err != nil {
@@ -89,6 +95,7 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 		authLimit: ratelimit.New(20, time.Minute),
 		audit:     audit.New(logger),
 		proxies:   proxies,
+		publicURL: publicURL,
 	}, nil
 }
 
@@ -112,7 +119,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /play", s.playStaticRedirect)
 		mux.Handle("GET /play/", http.StripPrefix("/play/", http.FileServer(http.Dir(s.cfg.PlayStaticDir))))
 	}
-	return http.MaxBytesHandler(mux, s.cfg.MaxBodyBytes)
+	return s.browserHardening(http.MaxBytesHandler(mux, s.cfg.MaxBodyBytes))
 }
 
 func (s *Server) HTTPServer() *http.Server {
@@ -131,6 +138,77 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func (s *Server) browserHardening(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.setSecurityHeaders(w)
+		if s.shouldRedirectHTTPS(r) {
+			http.Redirect(w, r, s.publicURL.String()+r.URL.RequestURI(), http.StatusPermanentRedirect)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) setSecurityHeaders(w http.ResponseWriter) {
+	header := w.Header()
+	if s.publicURL.Scheme == "https" {
+		header.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	}
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Referrer-Policy", "no-referrer")
+	header.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=()")
+	header.Set("X-Frame-Options", "DENY")
+	header.Set("Content-Security-Policy", s.contentSecurityPolicy())
+}
+
+func (s *Server) contentSecurityPolicy() string {
+	connectSrc := "'self'"
+	if s.publicURL.Host != "" {
+		switch s.publicURL.Scheme {
+		case "https":
+			connectSrc += " https://" + s.publicURL.Host + " wss://" + s.publicURL.Host
+		case "http":
+			connectSrc += " http://" + s.publicURL.Host + " ws://" + s.publicURL.Host
+		}
+	}
+	return strings.Join([]string{
+		"default-src 'self'",
+		"base-uri 'self'",
+		"object-src 'none'",
+		"frame-ancestors 'none'",
+		"form-action 'self'",
+		"script-src 'self'",
+		"style-src 'self' 'unsafe-inline'",
+		"img-src 'self' data:",
+		"font-src 'self' data:",
+		"connect-src " + connectSrc,
+	}, "; ")
+}
+
+func (s *Server) shouldRedirectHTTPS(r *http.Request) bool {
+	if s.publicURL.Scheme != "https" {
+		return false
+	}
+	if !sameHost(r.Host, s.publicURL.Host) {
+		return false
+	}
+	return !s.isEffectivelyHTTPS(r)
+}
+
+func (s *Server) isEffectivelyHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if !s.trustsProxy(remoteIP(r.RemoteAddr)) {
+		return false
+	}
+	if singleHeaderToken(r.Header, "X-Forwarded-Proto") == "https" {
+		return true
+	}
+	forwarded := singleHeaderToken(r.Header, "Forwarded")
+	return forwardedProto(forwarded) == "https"
 }
 
 func (s *Server) authPreflight(w http.ResponseWriter, r *http.Request) {
@@ -600,6 +678,50 @@ func singleClientIPHeader(header http.Header, name string) string {
 		return ""
 	}
 	return singleHeaderIP(values[0])
+}
+
+func sameHost(requestHost, originHost string) bool {
+	requestHost = strings.TrimSpace(requestHost)
+	originHost = strings.TrimSpace(originHost)
+	if strings.EqualFold(requestHost, originHost) {
+		return true
+	}
+	requestHostname := requestHost
+	if host, _, err := net.SplitHostPort(requestHost); err == nil {
+		requestHostname = host
+	}
+	originHostname := originHost
+	if host, _, err := net.SplitHostPort(originHost); err == nil {
+		originHostname = host
+	}
+	return strings.EqualFold(requestHostname, originHostname)
+}
+
+func singleHeaderToken(header http.Header, name string) string {
+	values := header.Values(name)
+	if len(values) != 1 {
+		return ""
+	}
+	value := strings.TrimSpace(values[0])
+	if value == "" || strings.Contains(value, ",") {
+		return ""
+	}
+	return strings.ToLower(value)
+}
+
+func forwardedProto(value string) string {
+	for _, part := range strings.Split(value, ";") {
+		key, raw, found := strings.Cut(strings.TrimSpace(part), "=")
+		if !found || !strings.EqualFold(strings.TrimSpace(key), "proto") {
+			continue
+		}
+		proto := strings.Trim(strings.TrimSpace(raw), `"`)
+		if proto == "" || strings.ContainsAny(proto, ",;") {
+			return ""
+		}
+		return strings.ToLower(proto)
+	}
+	return ""
 }
 
 func parseProxyCIDRs(cidrs []string) ([]netip.Prefix, error) {
