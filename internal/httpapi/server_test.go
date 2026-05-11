@@ -1,6 +1,10 @@
 package httpapi
 
 import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +12,8 @@ import (
 	"time"
 
 	"github.com/mshilts/incarnate-web-gateway/internal/config"
+	"github.com/mshilts/incarnate-web-gateway/internal/passkeys"
+	"nhooyr.io/websocket"
 )
 
 func testServer(t *testing.T) *Server {
@@ -21,9 +27,12 @@ func testServer(t *testing.T) *Server {
 		JavaHost:          config.DefaultJavaHost,
 		JavaPort:          config.DefaultJavaPort,
 		GatewayID:         config.DefaultGatewayID,
+		HMACSecret:        "0123456789abcdef0123456789abcdef",
 		SessionCookieName: config.DefaultSessionCookieName,
+		CookieSecure:      true,
 		SessionTTL:        time.Hour,
 		SessionIdleTTL:    time.Minute,
+		JavaTimeout:       10 * time.Millisecond,
 		MaxBodyBytes:      1024,
 		MaxFrameBytes:     1024,
 		MaxHeaderBytes:    1024,
@@ -187,4 +196,108 @@ func TestClientIPRejectsDuplicateHeaderLines(t *testing.T) {
 	if got := server.clientIP(req); got != "127.0.0.1" {
 		t.Fatalf("clientIP = %q", got)
 	}
+}
+
+func TestLoginVerifyIssuesConfiguredSessionCookie(t *testing.T) {
+	server := testServer(t)
+	server.cfg.CookieSecure = false
+	server.passkeys = fakePasskeyService{
+		loginVerify: passkeys.AuthenticatedCredential{Account: "matt", CredentialID: "cred", CredentialLabel: "iphone"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/login/verify", strings.NewReader(`{"loginId":"login-1","response":{"id":"cred"}}`))
+	req.Header.Set("Origin", config.DefaultPublicOrigin)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookie count = %d", len(cookies))
+	}
+	cookie := cookies[0]
+	if cookie.Name != config.DefaultSessionCookieName || cookie.Value == "" || !cookie.HttpOnly || cookie.Secure {
+		t.Fatalf("unexpected cookie: %+v", cookie)
+	}
+}
+
+func TestPlayWSProxiesAfterJavaSessionBegin(t *testing.T) {
+	server := testServer(t)
+	server.cfg.MaxFrameBytes = 1024
+	record, err := server.sessions.Create("matt", "Y3JlZA", "iphone")
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	sessionBegin := make(chan map[string]any, 1)
+	server.java.Dialer = func(context.Context, string) (net.Conn, error) {
+		javaSide, gatewaySide := net.Pipe()
+		go func() {
+			reader := bufio.NewReader(javaSide)
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var req map[string]any
+			_ = json.Unmarshal(line, &req)
+			sessionBegin <- req
+			_, _ = javaSide.Write([]byte(`{"type":"gateway_session_result","ok":true,"account":"matt","credentialLabel":"iphone"}` + "\n"))
+			line, err = reader.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			_, _ = javaSide.Write(line)
+		}()
+		return gatewaySide, nil
+	}
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/play/ws"
+	wsConn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Origin": []string{config.DefaultPublicOrigin},
+			"Cookie": []string{(&http.Cookie{Name: config.DefaultSessionCookieName, Value: record.ID}).String()},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Dial websocket: %v", err)
+	}
+	defer wsConn.Close(websocket.StatusNormalClosure, "")
+	req := <-sessionBegin
+	if req["type"] != "gateway_session_begin" || req["account"] != "matt" || req["signature"] == "" {
+		t.Fatalf("bad session begin: %+v", req)
+	}
+	if err := wsConn.Write(ctx, websocket.MessageText, []byte(`{"type":"ping"}`)); err != nil {
+		t.Fatalf("websocket write: %v", err)
+	}
+	messageType, data, err := wsConn.Read(ctx)
+	if err != nil {
+		t.Fatalf("websocket read: %v", err)
+	}
+	if messageType != websocket.MessageText || string(data) != `{"type":"ping"}` {
+		t.Fatalf("unexpected websocket echo: type=%v data=%s", messageType, data)
+	}
+}
+
+type fakePasskeyService struct {
+	loginVerify passkeys.AuthenticatedCredential
+}
+
+func (f fakePasskeyService) LoginOptions(context.Context, passkeys.LoginOptionsRequest) (map[string]any, error) {
+	return map[string]any{"ok": true}, nil
+}
+
+func (f fakePasskeyService) LoginVerify(context.Context, passkeys.LoginVerifyRequest) (passkeys.AuthenticatedCredential, error) {
+	return f.loginVerify, nil
+}
+
+func (f fakePasskeyService) RegistrationOptions(context.Context, passkeys.RegistrationOptionsRequest) (map[string]any, error) {
+	return map[string]any{"ok": true}, nil
+}
+
+func (f fakePasskeyService) RegistrationVerify(context.Context, passkeys.RegistrationVerifyRequest) (passkeys.AuthenticatedCredential, error) {
+	return passkeys.AuthenticatedCredential{}, nil
 }

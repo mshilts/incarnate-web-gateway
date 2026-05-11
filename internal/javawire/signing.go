@@ -17,6 +17,10 @@ type Signer struct {
 }
 
 func (s Signer) Sign(payload map[string]any) (map[string]any, error) {
+	return s.SignWithNonce(payload, nil)
+}
+
+func (s Signer) SignWithNonce(payload map[string]any, nonceFunc func() (string, error)) (map[string]any, error) {
 	if s.GatewayID == "" {
 		return nil, errors.New("gateway id is required")
 	}
@@ -31,7 +35,10 @@ func (s Signer) Sign(payload map[string]any) (map[string]any, error) {
 	signed["gatewayId"] = s.GatewayID
 	signed["issuedAt"] = now().UnixMilli()
 	if _, ok := signed["nonce"]; !ok {
-		nonce, err := randomNonce()
+		if nonceFunc == nil {
+			nonceFunc = randomNonce
+		}
+		nonce, err := nonceFunc()
 		if err != nil {
 			return nil, err
 		}

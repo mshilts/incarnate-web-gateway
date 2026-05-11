@@ -4,10 +4,10 @@
 It is a small Go service that will sit between `https://play.inc-realm.com` and
 the private Java AI socket on the game VM.
 
-Status: `v0.1` skeleton. It compiles, has focused security-oriented unit tests,
-and exposes the first HTTP route shape. Passkey ceremonies and the WebSocket
-Java proxy are intentionally placeholders until the Java gateway-control
-commands land.
+Status: local end-to-end implementation slice. It compiles, has focused
+security-oriented unit tests, implements WebAuthn login/registration ceremony
+state, signs Java gateway-control commands, issues server-side session cookies,
+and proxies authenticated browser WebSockets to the private Java AI socket.
 
 ## Why This Exists
 
@@ -65,6 +65,12 @@ Passkeys are the intended browser credential. In the full implementation:
 
 Open self-service passkey registration is not part of `v0.1`.
 
+The current Java runtime does not yet expose a `gateway_pairing_claim` command.
+For local end-to-end testing only, registration accepts
+`pairingToken=account:<accountName>` and then asks Java to store the verified
+credential with `gateway_passkey_register`. Opaque pairing tokens fail closed
+until Java owns the pairing-token claim.
+
 ## Relationship To `@inc-realm/bridge`
 
 `@inc-realm/bridge` remains the SSH-first path for desktop users, operators,
@@ -115,8 +121,11 @@ INCARNATE_GATEWAY_RP_NAME=Incarnate
 INCARNATE_GATEWAY_JAVA_HOST=127.0.0.1
 INCARNATE_GATEWAY_JAVA_PORT=8083
 INCARNATE_GATEWAY_ID=prod-play-gateway-1
+INCARNATE_GATEWAY_HMAC_SECRET=change-me-at-least-32-bytes-long
 INCARNATE_GATEWAY_HMAC_SECRET_FILE=/etc/incarnate/web-gateway.hmac
 INCARNATE_GATEWAY_SESSION_SECRET_FILE=/etc/incarnate/web-gateway.session
+INCARNATE_GATEWAY_COOKIE_SECURE=true
+INCARNATE_GATEWAY_JAVA_TIMEOUT=10s
 INCARNATE_GATEWAY_LOG_LEVEL=info
 INCARNATE_GATEWAY_MAX_HEADER_BYTES=16384
 INCARNATE_GATEWAY_CLIENT_IP_HEADER=CF-Connecting-IP
@@ -138,8 +147,11 @@ See [docs/configuration.md](docs/configuration.md) for the full list.
 - `POST /auth/passkey/register/verify`
 - `GET /play/ws`
 
-The passkey and WebSocket routes enforce the first perimeter checks but return
-`501 Not Implemented` in `v0.1` where Java protocol support is still pending.
+The passkey routes require exact configured origins, strict JSON request bodies,
+and Java credential lookup/register commands. `login/verify` sets an opaque
+`HttpOnly` session cookie. `/play/ws` requires that cookie, starts a signed
+`gateway_session_begin` Java session, and proxies bounded JSON frames only after
+Java accepts the session.
 
 ## Release
 

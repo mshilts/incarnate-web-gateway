@@ -26,6 +26,7 @@ const (
 	DefaultMaxFrameBytes     int64 = 64 * 1024
 	DefaultMaxHeaderBytes          = 16 * 1024
 	DefaultClientIPHeader          = "CF-Connecting-IP"
+	DefaultJavaTimeout             = 10 * time.Second
 )
 
 var errNoAllowedOrigins = errors.New("at least one allowed origin is required")
@@ -43,12 +44,15 @@ type Config struct {
 	JavaHost          string
 	JavaPort          int
 	GatewayID         string
+	HMACSecret        string
 	HMACSecretFile    string
 	SessionSecretFile string
 	LogLevel          string
 	SessionCookieName string
+	CookieSecure      bool
 	SessionTTL        time.Duration
 	SessionIdleTTL    time.Duration
+	JavaTimeout       time.Duration
 	MaxBodyBytes      int64
 	MaxFrameBytes     int64
 	MaxHeaderBytes    int
@@ -67,6 +71,14 @@ func FromEnv() (Config, error) {
 		errs = append(errs, err)
 	}
 	sessionIdleTTL, err := getenvDuration("INCARNATE_GATEWAY_SESSION_IDLE_TTL", 30*time.Minute)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	javaTimeout, err := getenvDuration("INCARNATE_GATEWAY_JAVA_TIMEOUT", DefaultJavaTimeout)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cookieSecure, err := getenvBool("INCARNATE_GATEWAY_COOKIE_SECURE", defaultCookieSecure(getenv("INCARNATE_GATEWAY_PUBLIC_ORIGIN", DefaultPublicOrigin)))
 	if err != nil {
 		errs = append(errs, err)
 	}
@@ -91,12 +103,15 @@ func FromEnv() (Config, error) {
 		JavaHost:          getenv("INCARNATE_GATEWAY_JAVA_HOST", DefaultJavaHost),
 		JavaPort:          javaPort,
 		GatewayID:         getenv("INCARNATE_GATEWAY_ID", DefaultGatewayID),
+		HMACSecret:        os.Getenv("INCARNATE_GATEWAY_HMAC_SECRET"),
 		HMACSecretFile:    os.Getenv("INCARNATE_GATEWAY_HMAC_SECRET_FILE"),
 		SessionSecretFile: os.Getenv("INCARNATE_GATEWAY_SESSION_SECRET_FILE"),
 		LogLevel:          getenv("INCARNATE_GATEWAY_LOG_LEVEL", "info"),
 		SessionCookieName: getenv("INCARNATE_GATEWAY_SESSION_COOKIE_NAME", DefaultSessionCookieName),
+		CookieSecure:      cookieSecure,
 		SessionTTL:        sessionTTL,
 		SessionIdleTTL:    sessionIdleTTL,
+		JavaTimeout:       javaTimeout,
 		MaxBodyBytes:      int64(maxBodyBytes),
 		MaxFrameBytes:     int64(maxFrameBytes),
 		MaxHeaderBytes:    maxHeaderBytes,
@@ -142,6 +157,9 @@ func (c Config) Validate() error {
 	}
 	if c.SessionTTL <= 0 || c.SessionIdleTTL <= 0 {
 		errs = append(errs, errors.New("session ttl and idle ttl must be positive"))
+	}
+	if c.JavaTimeout <= 0 {
+		errs = append(errs, errors.New("java timeout must be positive"))
 	}
 	if c.MaxBodyBytes <= 0 || c.MaxFrameBytes <= 0 || c.MaxHeaderBytes <= 0 {
 		errs = append(errs, errors.New("body, frame, and header limits must be positive"))
@@ -310,6 +328,26 @@ func getenvDuration(key string, fallback time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be a duration: %w", key, err)
 	}
 	return parsed, nil
+}
+
+func getenvBool(key string, fallback bool) (bool, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback, nil
+	}
+	if strings.TrimSpace(value) == "" {
+		return false, fmt.Errorf("%s must not be empty", key)
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be boolean: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func defaultCookieSecure(publicOrigin string) bool {
+	u, err := url.Parse(publicOrigin)
+	return err != nil || u.Scheme != "http"
 }
 
 func getenvCSV(key string, fallback []string) []string {
