@@ -21,6 +21,29 @@ var (
 	ErrProtocol = errors.New("java gateway protocol violation")
 )
 
+type RejectedError struct {
+	Message string
+}
+
+func (e RejectedError) Error() string {
+	if e.Message == "" {
+		return ErrRejected.Error()
+	}
+	return ErrRejected.Error() + ": " + e.Message
+}
+
+func (e RejectedError) Unwrap() error {
+	return ErrRejected
+}
+
+func RejectionMessage(err error) string {
+	var rejected RejectedError
+	if errors.As(err, &rejected) {
+		return strings.TrimSpace(rejected.Message)
+	}
+	return ""
+}
+
 type Client struct {
 	Addr      string
 	Signer    Signer
@@ -267,6 +290,7 @@ func (c Client) readTyped(reader *bufio.Reader, expectedType string, dst any) er
 			Type     string `json:"type"`
 			OK       bool   `json:"ok"`
 			Accepted bool   `json:"accepted"`
+			Message  string `json:"message"`
 		}
 		if err := json.Unmarshal(line, &envelope); err != nil {
 			return fmt.Errorf("%w: invalid json response", ErrProtocol)
@@ -278,7 +302,7 @@ func (c Client) readTyped(reader *bufio.Reader, expectedType string, dst any) er
 			return fmt.Errorf("%w: expected %s got %s", ErrProtocol, expectedType, envelope.Type)
 		}
 		if !envelope.OK && !envelope.Accepted {
-			return ErrRejected
+			return RejectedError{Message: envelope.Message}
 		}
 		if err := json.Unmarshal(line, dst); err != nil {
 			return fmt.Errorf("%w: invalid typed response", ErrProtocol)

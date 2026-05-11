@@ -64,11 +64,14 @@ func TestRegistrationOptionsAcceptsLocalAccountTokenOnlyWhenConfigured(t *testin
 func TestSignupOptionsRejectsExistingAccount(t *testing.T) {
 	service := testWebAuthnService(t, &fakeJava{})
 	_, err := service.SignupOptions(context.Background(), SignupOptionsRequest{
-		Account: "matt",
+		Account: "existing_player",
 		Label:   "iphone",
 	})
-	if !errors.Is(err, ErrRejected) {
-		t.Fatalf("SignupOptions error = %v, want %v", err, ErrRejected)
+	if !errors.Is(err, ErrAccountTaken) {
+		t.Fatalf("SignupOptions error = %v, want %v", err, ErrAccountTaken)
+	}
+	if got := PublicErrorMessage(err, "fallback"); got != AccountTakenMessage {
+		t.Fatalf("PublicErrorMessage = %q", got)
 	}
 }
 

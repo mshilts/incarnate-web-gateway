@@ -276,7 +276,7 @@ func (s *Server) signupOptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "signup options rejected")
+		writeError(w, signupRejectionStatus(err), passkeys.PublicErrorMessage(err, "signup options rejected"))
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -300,7 +300,7 @@ func (s *Server) signupVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.audit.Event(r.Context(), "passkey_signup_verify_rejected", "error", err.Error())
-		writeError(w, http.StatusUnauthorized, "signup verify rejected")
+		writeError(w, signupRejectionStatus(err), passkeys.PublicErrorMessage(err, "signup verify rejected"))
 		return
 	}
 	record, err := s.sessions.Create(auth.Account, auth.CredentialID, auth.CredentialLabel)
@@ -442,6 +442,13 @@ func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{"ok": false, "error": message})
+}
+
+func signupRejectionStatus(err error) int {
+	if errors.Is(err, passkeys.ErrAccountTaken) || passkeys.PublicErrorMessage(err, "") == passkeys.AccountTakenMessage {
+		return http.StatusConflict
+	}
+	return http.StatusUnauthorized
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

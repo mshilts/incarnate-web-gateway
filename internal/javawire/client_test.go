@@ -125,6 +125,34 @@ func TestClientSignupPasskeySignsAndParsesJavaResponse(t *testing.T) {
 	}
 }
 
+func TestClientRejectedGatewayResultCarriesJavaMessage(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	client, _ := fakeJavaClient(t, secret, func(map[string]any) map[string]any {
+		return map[string]any{
+			"type":    "gateway_passkey_signup_result",
+			"ok":      false,
+			"message": "Account already taken.",
+		}
+	})
+	credential := Credential{
+		Label:             "phone",
+		CredentialID:      "Y3JlZA",
+		PublicKeyCOSE:     "cHVibGlj",
+		SignCount:         1,
+		Transports:        []string{"internal"},
+		RPID:              "inc-realm.com",
+		Origin:            "https://play.inc-realm.com",
+		AllowedCharacters: []string{},
+	}
+	_, err := client.SignupPasskey(context.Background(), "matt", "phone", credential)
+	if !errors.Is(err, ErrRejected) {
+		t.Fatalf("SignupPasskey error = %v, want %v", err, ErrRejected)
+	}
+	if got := RejectionMessage(err); got != "Account already taken." {
+		t.Fatalf("RejectionMessage = %q", got)
+	}
+}
+
 func TestClientFailsClosedOnMismatchedTypeRejectedAndOversize(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
 	for _, tc := range []struct {

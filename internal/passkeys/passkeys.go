@@ -19,9 +19,25 @@ import (
 var ErrNotImplemented = errors.New("passkey ceremonies are placeholders in v0.1")
 
 var (
-	ErrNotFound = errors.New("passkey ceremony not found")
-	ErrRejected = errors.New("passkey ceremony rejected")
+	ErrNotFound     = errors.New("passkey ceremony not found")
+	ErrRejected     = errors.New("passkey ceremony rejected")
+	ErrAccountTaken = errors.New("account already taken")
 )
+
+const AccountTakenMessage = "Account already taken."
+
+func PublicErrorMessage(err error, fallback string) string {
+	if errors.Is(err, ErrAccountTaken) {
+		return AccountTakenMessage
+	}
+	switch message := javawire.RejectionMessage(err); message {
+	case AccountTakenMessage, "Account already exists.":
+		return AccountTakenMessage
+	case "That account name is reserved.", "Unsafe account name.":
+		return message
+	}
+	return fallback
+}
 
 type JavaClient interface {
 	ClaimPairing(context.Context, string) (javawire.PairingClaimResult, error)
@@ -222,9 +238,11 @@ func (s *WebAuthnService) SignupOptions(ctx context.Context, req SignupOptionsRe
 		return nil, ErrRejected
 	}
 	if _, err := s.java.LookupPasskeys(ctx, account); err == nil {
-		return nil, ErrRejected
+		return nil, ErrAccountTaken
 	} else if !errors.Is(err, javawire.ErrRejected) {
 		return nil, err
+	} else if message := javawire.RejectionMessage(err); message != "" && message != "Unknown account." {
+		return nil, ErrAccountTaken
 	}
 	return s.beginRegistration(account, label, nil, true)
 }

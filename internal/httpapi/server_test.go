@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mshilts/incarnate-web-gateway/internal/config"
+	"github.com/mshilts/incarnate-web-gateway/internal/javawire"
 	"github.com/mshilts/incarnate-web-gateway/internal/passkeys"
 	"nhooyr.io/websocket"
 )
@@ -345,6 +346,41 @@ func TestSignupVerifyIssuesSessionCookie(t *testing.T) {
 	}
 }
 
+func TestSignupOptionsReturnsConflictForExistingAccount(t *testing.T) {
+	server := testServer(t)
+	server.passkeys = fakePasskeyService{signupOptionsErr: passkeys.ErrAccountTaken}
+	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/signup/options", strings.NewReader(`{"account":"matt","label":"passkey"}`))
+	req.Header.Set("Origin", config.DefaultPublicOrigin)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if rec.Header().Get("Location") != "" {
+		t.Fatalf("unexpected redirect location: %q", rec.Header().Get("Location"))
+	}
+	if !strings.Contains(rec.Body.String(), `"error":"Account already taken."`) {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestSignupVerifyReturnsConflictForJavaDuplicateRace(t *testing.T) {
+	server := testServer(t)
+	server.passkeys = fakePasskeyService{signupVerifyErr: javawire.RejectedError{Message: passkeys.AccountTakenMessage}}
+	req := httptest.NewRequest(http.MethodPost, "/auth/passkey/signup/verify", strings.NewReader(`{"registrationId":"reg-1","response":{"id":"cred"}}`))
+	req.Header.Set("Origin", config.DefaultPublicOrigin)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"error":"Account already taken."`) {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
 func TestPlayWSProxiesAfterJavaSessionBegin(t *testing.T) {
 	server := testServer(t)
 	server.cfg.MaxFrameBytes = 1024
@@ -406,8 +442,10 @@ func TestPlayWSProxiesAfterJavaSessionBegin(t *testing.T) {
 }
 
 type fakePasskeyService struct {
-	loginVerify  passkeys.AuthenticatedCredential
-	signupVerify passkeys.AuthenticatedCredential
+	loginVerify      passkeys.AuthenticatedCredential
+	signupVerify     passkeys.AuthenticatedCredential
+	signupOptionsErr error
+	signupVerifyErr  error
 }
 
 func (f fakePasskeyService) LoginOptions(context.Context, passkeys.LoginOptionsRequest) (map[string]any, error) {
@@ -427,9 +465,15 @@ func (f fakePasskeyService) RegistrationVerify(context.Context, passkeys.Registr
 }
 
 func (f fakePasskeyService) SignupOptions(context.Context, passkeys.SignupOptionsRequest) (map[string]any, error) {
+	if f.signupOptionsErr != nil {
+		return nil, f.signupOptionsErr
+	}
 	return map[string]any{"ok": true}, nil
 }
 
 func (f fakePasskeyService) SignupVerify(context.Context, passkeys.SignupVerifyRequest) (passkeys.AuthenticatedCredential, error) {
+	if f.signupVerifyErr != nil {
+		return passkeys.AuthenticatedCredential{}, f.signupVerifyErr
+	}
 	return f.signupVerify, nil
 }
