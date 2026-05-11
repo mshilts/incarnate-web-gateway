@@ -90,6 +90,32 @@ func TestPlayStaticServesConfiguredDirectory(t *testing.T) {
 	}
 }
 
+func TestPlayStaticServesPackagedGameAssets(t *testing.T) {
+	staticDir := t.TempDir()
+	if err := os.MkdirAll(staticDir+"/game-assets", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(staticDir+"/game-assets/tile-manifest.json", []byte(`{"black":{"tileName":"black"}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg := testConfig()
+	cfg.PlayStaticDir = staticDir
+	server, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/play/game-assets/tile-manifest.json", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"black"`) {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+}
+
 func TestPlayStaticRedirectsBarePlayPath(t *testing.T) {
 	cfg := testConfig()
 	cfg.PlayStaticDir = t.TempDir()
