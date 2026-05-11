@@ -400,6 +400,7 @@ func (s *WebAuthnService) finishRegistration(ctx context.Context, registrationID
 		RPID:              s.webAuthn.Config.RPID,
 		Origin:            firstOrigin(s.webAuthn.Config.RPOrigins),
 		DeviceType:        deviceType(credential.Flags),
+		BackupEligible:    credential.Flags.BackupEligible,
 		BackedUp:          credential.Flags.BackupState,
 		AllowedCharacters: []string{},
 	}
@@ -487,9 +488,20 @@ func (u javaUser) WebAuthnCredentials() []webauthnlib.Credential {
 			Authenticator: webauthnlib.Authenticator{
 				SignCount: record.SignCount,
 			},
+			Flags: webauthnlib.CredentialFlags{
+				BackupEligible: credentialBackupEligible(record),
+				BackupState:    record.BackedUp,
+			},
 		})
 	}
 	return credentials
+}
+
+func credentialBackupEligible(record javawire.Credential) bool {
+	if record.BackupEligible || record.BackedUp {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(record.DeviceType), "multiDevice")
 }
 
 func rawCredentialRequest(raw json.RawMessage) *http.Request {

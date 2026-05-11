@@ -231,6 +231,38 @@ func TestDiscoverableUserRejectsUnsafeOrUnownedCredentials(t *testing.T) {
 	}
 }
 
+func TestJavaUserWebAuthnCredentialsPreserveBackupFlags(t *testing.T) {
+	user := javaUser{account: "matt", credentials: []javawire.Credential{
+		{
+			CredentialID:   "Y3JlZC1h",
+			PublicKeyCOSE:  "cHVibGljLWE",
+			DeviceType:     "multiDevice",
+			BackedUp:       true,
+			SignCount:      7,
+			Transports:     []string{"internal"},
+			BackupEligible: false,
+		},
+		{
+			CredentialID:      "Y3JlZC1i",
+			PublicKeyCOSE:     "cHVibGljLWI",
+			DeviceType:        "singleDevice",
+			BackupEligible:    true,
+			BackedUp:          false,
+			AllowedCharacters: []string{},
+		},
+	}}
+	credentials := user.WebAuthnCredentials()
+	if len(credentials) != 2 {
+		t.Fatalf("credential count = %d", len(credentials))
+	}
+	if !credentials[0].Flags.BackupEligible || !credentials[0].Flags.BackupState {
+		t.Fatalf("multiDevice/backedUp flags = %+v, want backup eligible and backed up", credentials[0].Flags)
+	}
+	if !credentials[1].Flags.BackupEligible || credentials[1].Flags.BackupState {
+		t.Fatalf("explicit backup flags = %+v, want backup eligible without backup state", credentials[1].Flags)
+	}
+}
+
 func testWebAuthnService(t *testing.T, java *fakeJava, options ...func(*ServiceConfig)) *WebAuthnService {
 	t.Helper()
 	cfg := ServiceConfig{

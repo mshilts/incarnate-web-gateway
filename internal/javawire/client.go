@@ -64,6 +64,7 @@ type Credential struct {
 	RPID              string   `json:"rpId"`
 	Origin            string   `json:"origin"`
 	DeviceType        string   `json:"deviceType,omitempty"`
+	BackupEligible    bool     `json:"backupEligible,omitempty"`
 	BackedUp          bool     `json:"backedUp,omitempty"`
 	AllowedCharacters []string `json:"allowedCharacters"`
 }
