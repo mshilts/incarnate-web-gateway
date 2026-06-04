@@ -31,9 +31,9 @@ var (
 	errWebSocketSessionExpired = errors.New("websocket session expired")
 )
 
-var (
-	browserWebSocketPingInterval = 25 * time.Second
-	browserWebSocketPingTimeout  = 10 * time.Second
+const (
+	defaultBrowserWebSocketPingInterval = 25 * time.Second
+	defaultBrowserWebSocketPingTimeout  = 10 * time.Second
 )
 
 type Server struct {
@@ -46,6 +46,9 @@ type Server struct {
 	audit     audit.Logger
 	proxies   []netip.Prefix
 	publicURL *url.URL
+
+	browserWebSocketPingInterval time.Duration
+	browserWebSocketPingTimeout  time.Duration
 }
 
 func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
@@ -106,6 +109,9 @@ func NewServer(cfg config.Config, logger *slog.Logger) (*Server, error) {
 		audit:     audit.New(logger),
 		proxies:   proxies,
 		publicURL: publicURL,
+
+		browserWebSocketPingInterval: defaultBrowserWebSocketPingInterval,
+		browserWebSocketPingTimeout:  defaultBrowserWebSocketPingTimeout,
 	}, nil
 }
 
@@ -637,14 +643,14 @@ func proxyJavaToBrowser(ctx context.Context, wsConn *websocket.Conn, javaReader 
 }
 
 func (s *Server) keepAliveBrowserWebSocket(ctx context.Context, wsConn *websocket.Conn, sessionID string) error {
-	ticker := time.NewTicker(browserWebSocketPingInterval)
+	ticker := time.NewTicker(s.browserWebSocketPingInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			pingCtx, cancel := context.WithTimeout(ctx, browserWebSocketPingTimeout)
+			pingCtx, cancel := context.WithTimeout(ctx, s.browserWebSocketPingTimeout)
 			err := wsConn.Ping(pingCtx)
 			cancel()
 			if err != nil {

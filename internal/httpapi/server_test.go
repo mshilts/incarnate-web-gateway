@@ -563,16 +563,9 @@ func TestPlayWSDropsBrowserLocalClientDebugFrames(t *testing.T) {
 }
 
 func TestPlayWSHeartbeatRefreshesSessionIdleTTL(t *testing.T) {
-	originalInterval := browserWebSocketPingInterval
-	originalTimeout := browserWebSocketPingTimeout
-	browserWebSocketPingInterval = 10 * time.Millisecond
-	browserWebSocketPingTimeout = time.Second
-	t.Cleanup(func() {
-		browserWebSocketPingInterval = originalInterval
-		browserWebSocketPingTimeout = originalTimeout
-	})
-
 	server := testServer(t)
+	server.browserWebSocketPingInterval = 10 * time.Millisecond
+	server.browserWebSocketPingTimeout = time.Second
 	now := time.Unix(1000, 0)
 	var nowUnixNano atomic.Int64
 	nowUnixNano.Store(now.UnixNano())
