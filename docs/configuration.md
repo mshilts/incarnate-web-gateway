@@ -9,6 +9,7 @@ config parser.
 | `INCARNATE_GATEWAY_BIND` | `127.0.0.1:8789` | Local HTTP/WSS bind address. |
 | `INCARNATE_GATEWAY_PUBLIC_ORIGIN` | `https://play.inc-realm.com` | Canonical browser origin. |
 | `INCARNATE_GATEWAY_ALLOWED_ORIGINS` | `https://play.inc-realm.com` | Comma-separated exact origin allowlist. |
+| `INCARNATE_GATEWAY_ASSET_ORIGINS` | empty | Comma-separated exact origins allowed by CSP for CDN-hosted browser/game assets. |
 | `INCARNATE_GATEWAY_RP_ID` | `inc-realm.com` | WebAuthn relying-party ID. |
 | `INCARNATE_GATEWAY_RP_NAME` | `Incarnate` | WebAuthn relying-party display name. |
 | `INCARNATE_GATEWAY_JAVA_HOST` | `127.0.0.1` | Private Java AI socket host. |

@@ -8,6 +8,7 @@ import (
 func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("INCARNATE_GATEWAY_BIND", "127.0.0.1:9000")
 	t.Setenv("INCARNATE_GATEWAY_ALLOWED_ORIGINS", "https://play.inc-realm.com,http://127.0.0.1:5173")
+	t.Setenv("INCARNATE_GATEWAY_ASSET_ORIGINS", "https://inc-realm.com,https://static.inc-realm.com")
 	t.Setenv("INCARNATE_GATEWAY_RP_ID", "inc-realm.com")
 	t.Setenv("INCARNATE_GATEWAY_PLAY_STATIC_DIR", "/srv/incarnate/browser-client")
 	t.Setenv("INCARNATE_GATEWAY_ALLOW_LOCAL_ACCOUNT_PAIRING", "true")
@@ -24,6 +25,9 @@ func TestConfigFromEnv(t *testing.T) {
 	}
 	if len(cfg.AllowedOrigins) != 2 {
 		t.Fatalf("AllowedOrigins length = %d", len(cfg.AllowedOrigins))
+	}
+	if len(cfg.AssetOrigins) != 2 || cfg.AssetOrigins[0] != "https://inc-realm.com" {
+		t.Fatalf("AssetOrigins = %#v", cfg.AssetOrigins)
 	}
 	if cfg.ClientIPHeader != DefaultClientIPHeader {
 		t.Fatalf("ClientIPHeader = %q", cfg.ClientIPHeader)
@@ -54,6 +58,12 @@ func TestConfigRejectsWildcardOrigin(t *testing.T) {
 	cfg.AllowedOrigins = []string{"*"}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate accepted wildcard origin")
+	}
+
+	cfg = validTestConfig()
+	cfg.AssetOrigins = []string{"*"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted wildcard asset origin")
 	}
 }
 
@@ -134,6 +144,12 @@ func TestConfigRejectsInvalidOriginShape(t *testing.T) {
 		cfg.AllowedOrigins = []string{origin}
 		if err := cfg.Validate(); err == nil {
 			t.Fatalf("Validate accepted bad origin %q", origin)
+		}
+
+		cfg = validTestConfig()
+		cfg.AssetOrigins = []string{origin}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("Validate accepted bad asset origin %q", origin)
 		}
 	}
 }

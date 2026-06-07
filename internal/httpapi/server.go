@@ -189,6 +189,12 @@ func (s *Server) contentSecurityPolicy() string {
 			connectSrc += " http://" + s.publicURL.Host + " ws://" + s.publicURL.Host
 		}
 	}
+	assetOrigins := joinCSPOrigins(s.cfg.AssetOrigins)
+	imgSrc := "'self' data:"
+	if assetOrigins != "" {
+		imgSrc += " " + assetOrigins
+		connectSrc += " " + assetOrigins
+	}
 	return strings.Join([]string{
 		"default-src 'self'",
 		"base-uri 'self'",
@@ -197,10 +203,27 @@ func (s *Server) contentSecurityPolicy() string {
 		"form-action 'self'",
 		"script-src 'self'",
 		"style-src 'self' 'unsafe-inline'",
-		"img-src 'self' data:",
+		"img-src " + imgSrc,
 		"font-src 'self' data:",
 		"connect-src " + connectSrc,
 	}, "; ")
+}
+
+func joinCSPOrigins(origins []string) string {
+	seen := make(map[string]struct{}, len(origins))
+	ordered := make([]string, 0, len(origins))
+	for _, origin := range origins {
+		origin = strings.TrimSpace(origin)
+		if origin == "" {
+			continue
+		}
+		if _, ok := seen[origin]; ok {
+			continue
+		}
+		seen[origin] = struct{}{}
+		ordered = append(ordered, origin)
+	}
+	return strings.Join(ordered, " ")
 }
 
 func (s *Server) shouldRedirectHTTPS(r *http.Request) bool {

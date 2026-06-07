@@ -39,6 +39,7 @@ type Config struct {
 	Bind                     string
 	PublicOrigin             string
 	AllowedOrigins           []string
+	AssetOrigins             []string
 	RPID                     string
 	RPName                   string
 	JavaHost                 string
@@ -104,6 +105,7 @@ func FromEnv() (Config, error) {
 		Bind:                     getenv("INCARNATE_GATEWAY_BIND", DefaultBind),
 		PublicOrigin:             getenv("INCARNATE_GATEWAY_PUBLIC_ORIGIN", DefaultPublicOrigin),
 		AllowedOrigins:           splitCSV(getenv("INCARNATE_GATEWAY_ALLOWED_ORIGINS", DefaultPublicOrigin)),
+		AssetOrigins:             splitCSV(os.Getenv("INCARNATE_GATEWAY_ASSET_ORIGINS")),
 		RPID:                     getenv("INCARNATE_GATEWAY_RP_ID", DefaultRPID),
 		RPName:                   getenv("INCARNATE_GATEWAY_RP_NAME", DefaultRPName),
 		JavaHost:                 getenv("INCARNATE_GATEWAY_JAVA_HOST", DefaultJavaHost),
@@ -147,6 +149,9 @@ func (c Config) Validate() error {
 		errs = append(errs, fmt.Errorf("invalid public origin: %w", err))
 	}
 	if err := validateOriginAllowlist(c.AllowedOrigins); err != nil {
+		errs = append(errs, err)
+	}
+	if err := validateOptionalOriginAllowlist("asset origin", c.AssetOrigins); err != nil {
 		errs = append(errs, err)
 	}
 	if err := validateRPID(c.RPID); err != nil {
@@ -194,6 +199,16 @@ func validateOriginAllowlist(origins []string) error {
 	for _, origin := range origins {
 		if err := validateOrigin(origin); err != nil {
 			errs = append(errs, fmt.Errorf("invalid allowed origin %q: %w", origin, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func validateOptionalOriginAllowlist(label string, origins []string) error {
+	var errs []error
+	for _, origin := range origins {
+		if err := validateOrigin(origin); err != nil {
+			errs = append(errs, fmt.Errorf("invalid %s %q: %w", label, origin, err))
 		}
 	}
 	return errors.Join(errs...)

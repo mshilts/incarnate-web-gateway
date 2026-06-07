@@ -214,6 +214,35 @@ func TestSecurityHTTPAddsBrowserHardeningHeaders(t *testing.T) {
 	}
 }
 
+func TestSecurityHTTPCSPAllowsConfiguredAssetOriginsOnlyForAssets(t *testing.T) {
+	cfg := testConfig()
+	cfg.AssetOrigins = []string{"https://inc-realm.com", "https://inc-realm.com"}
+	server, err := NewServer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	req := securityRequest(securityRoute{method: http.MethodGet, path: "/healthz"})
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	for _, directive := range []string{
+		"img-src 'self' data: https://inc-realm.com",
+		"connect-src 'self' https://play.inc-realm.com wss://play.inc-realm.com https://inc-realm.com",
+	} {
+		if !strings.Contains(csp, directive) {
+			t.Fatalf("Content-Security-Policy = %q, missing %q", csp, directive)
+		}
+	}
+	if !strings.Contains(csp, "script-src 'self';") {
+		t.Fatalf("Content-Security-Policy = %q, script-src should stay self-only", csp)
+	}
+	if strings.Count(csp, "https://inc-realm.com") != 2 {
+		t.Fatalf("Content-Security-Policy = %q, expected deduped asset origin in img/connect only", csp)
+	}
+}
+
 func TestSecurityHTTPRedirectsPublicHTTPToHTTPS(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://play.inc-realm.com/play/?slot=1", nil)
 	rec := httptest.NewRecorder()
