@@ -15,7 +15,7 @@ UMask=0077
 Environment=INCARNATE_GATEWAY_BIND=127.0.0.1:8789
 Environment=INCARNATE_GATEWAY_PUBLIC_ORIGIN=https://play.inc-realm.com
 Environment=INCARNATE_GATEWAY_ALLOWED_ORIGINS=https://play.inc-realm.com
-Environment=INCARNATE_GATEWAY_ASSET_ORIGINS=https://inc-realm.com,https://inc-realm.com/play/client
+Environment=INCARNATE_GATEWAY_ASSET_ORIGINS=https://inc-realm.com
 Environment=INCARNATE_GATEWAY_RP_ID=inc-realm.com
 Environment=INCARNATE_GATEWAY_RP_NAME=Incarnate
 Environment=INCARNATE_GATEWAY_JAVA_HOST=127.0.0.1
