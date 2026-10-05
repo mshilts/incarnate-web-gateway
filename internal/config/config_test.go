@@ -51,6 +51,20 @@ func TestConfigDefaultsDisableLocalAccountPairing(t *testing.T) {
 	if cfg.AllowLocalAccountPairing {
 		t.Fatal("AllowLocalAccountPairing defaulted to true")
 	}
+	if cfg.MaxFrameBytes != DefaultMaxFrameBytes || cfg.MaxJavaFrameBytes != DefaultMaxJavaFrameBytes {
+		t.Fatalf("directional frame limits = browser %d, Java %d", cfg.MaxFrameBytes, cfg.MaxJavaFrameBytes)
+	}
+}
+
+func TestConfigJavaFrameLimitOverrideKeepsBrowserLimit(t *testing.T) {
+	t.Setenv("INCARNATE_GATEWAY_MAX_JAVA_FRAME_BYTES", "4194304")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if cfg.MaxJavaFrameBytes != 4194304 || cfg.MaxFrameBytes != DefaultMaxFrameBytes {
+		t.Fatalf("directional frame limits = browser %d, Java %d", cfg.MaxFrameBytes, cfg.MaxJavaFrameBytes)
+	}
 }
 
 func TestConfigRejectsWildcardOrigin(t *testing.T) {
@@ -213,6 +227,7 @@ func validTestConfig() Config {
 		JavaTimeout:       1,
 		MaxBodyBytes:      1,
 		MaxFrameBytes:     1,
+		MaxJavaFrameBytes: 1,
 		MaxHeaderBytes:    1,
 		ClientIPHeader:    DefaultClientIPHeader,
 		TrustedProxyCIDRs: DefaultTrustedProxyCIDRs(),

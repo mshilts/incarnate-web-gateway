@@ -17,6 +17,9 @@ func TestSecurityConfigRejectsMalformedTypedEnv(t *testing.T) {
 		{name: "max-body-not-integer", key: "INCARNATE_GATEWAY_MAX_BODY_BYTES", value: "huge"},
 		{name: "max-body-zero", key: "INCARNATE_GATEWAY_MAX_BODY_BYTES", value: "0"},
 		{name: "max-frame-negative", key: "INCARNATE_GATEWAY_MAX_FRAME_BYTES", value: "-1"},
+		{name: "max-java-frame-not-integer", key: "INCARNATE_GATEWAY_MAX_JAVA_FRAME_BYTES", value: "huge"},
+		{name: "max-java-frame-zero", key: "INCARNATE_GATEWAY_MAX_JAVA_FRAME_BYTES", value: "0"},
+		{name: "max-java-frame-negative", key: "INCARNATE_GATEWAY_MAX_JAVA_FRAME_BYTES", value: "-1"},
 		{name: "max-header-zero", key: "INCARNATE_GATEWAY_MAX_HEADER_BYTES", value: "0"},
 	}
 

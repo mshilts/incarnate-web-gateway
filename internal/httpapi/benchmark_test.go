@@ -80,6 +80,7 @@ func benchmarkServer(tb testing.TB) *Server {
 		SessionIdleTTL:    time.Minute,
 		MaxBodyBytes:      1024,
 		MaxFrameBytes:     1024,
+		MaxJavaFrameBytes: config.DefaultMaxJavaFrameBytes,
 		MaxHeaderBytes:    1024,
 		ClientIPHeader:    config.DefaultClientIPHeader,
 		TrustedProxyCIDRs: config.DefaultTrustedProxyCIDRs(),
