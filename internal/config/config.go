@@ -24,7 +24,6 @@ const (
 	DefaultSessionCookieName       = "incarnate_gateway_session"
 	DefaultMaxBodyBytes      int64 = 64 * 1024
 	DefaultMaxFrameBytes     int64 = 1024 * 1024
-	DefaultMaxJavaFrameBytes int64 = 8 * 1024 * 1024
 	DefaultMaxHeaderBytes          = 16 * 1024
 	DefaultClientIPHeader          = "CF-Connecting-IP"
 	DefaultJavaTimeout             = 10 * time.Second
@@ -59,7 +58,6 @@ type Config struct {
 	JavaTimeout              time.Duration
 	MaxBodyBytes             int64
 	MaxFrameBytes            int64
-	MaxJavaFrameBytes        int64
 	MaxHeaderBytes           int
 	ClientIPHeader           string
 	TrustedProxyCIDRs        []string
@@ -68,25 +66,41 @@ type Config struct {
 func FromEnv() (Config, error) {
 	var errs []error
 	javaPort, err := getenvInt("INCARNATE_GATEWAY_JAVA_PORT", DefaultJavaPort)
-	errs = append(errs, err)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	sessionTTL, err := getenvDuration("INCARNATE_GATEWAY_SESSION_TTL", 12*time.Hour)
-	errs = append(errs, err)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	sessionIdleTTL, err := getenvDuration("INCARNATE_GATEWAY_SESSION_IDLE_TTL", 30*time.Minute)
-	errs = append(errs, err)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	javaTimeout, err := getenvDuration("INCARNATE_GATEWAY_JAVA_TIMEOUT", DefaultJavaTimeout)
-	errs = append(errs, err)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	cookieSecure, err := getenvBool("INCARNATE_GATEWAY_COOKIE_SECURE", defaultCookieSecure(getenv("INCARNATE_GATEWAY_PUBLIC_ORIGIN", DefaultPublicOrigin)))
-	errs = append(errs, err)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	allowLocalAccountPairing, err := getenvBool("INCARNATE_GATEWAY_ALLOW_LOCAL_ACCOUNT_PAIRING", false)
-	errs = append(errs, err)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	maxBodyBytes, err := getenvInt("INCARNATE_GATEWAY_MAX_BODY_BYTES", int(DefaultMaxBodyBytes))
-	errs = append(errs, err)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	maxFrameBytes, err := getenvInt("INCARNATE_GATEWAY_MAX_FRAME_BYTES", int(DefaultMaxFrameBytes))
-	errs = append(errs, err)
-	maxJavaFrameBytes, err := getenvInt("INCARNATE_GATEWAY_MAX_JAVA_FRAME_BYTES", int(DefaultMaxJavaFrameBytes))
-	errs = append(errs, err)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	maxHeaderBytes, err := getenvInt("INCARNATE_GATEWAY_MAX_HEADER_BYTES", DefaultMaxHeaderBytes)
-	errs = append(errs, err)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	cfg := Config{
 		Bind:                     getenv("INCARNATE_GATEWAY_BIND", DefaultBind),
 		PublicOrigin:             getenv("INCARNATE_GATEWAY_PUBLIC_ORIGIN", DefaultPublicOrigin),
@@ -110,12 +124,13 @@ func FromEnv() (Config, error) {
 		JavaTimeout:              javaTimeout,
 		MaxBodyBytes:             int64(maxBodyBytes),
 		MaxFrameBytes:            int64(maxFrameBytes),
-		MaxJavaFrameBytes:        int64(maxJavaFrameBytes),
 		MaxHeaderBytes:           maxHeaderBytes,
 		ClientIPHeader:           getenv("INCARNATE_GATEWAY_CLIENT_IP_HEADER", DefaultClientIPHeader),
 		TrustedProxyCIDRs:        getenvCSV("INCARNATE_GATEWAY_TRUSTED_PROXY_CIDRS", DefaultTrustedProxyCIDRs()),
 	}
-	errs = append(errs, cfg.Validate())
+	if err := cfg.Validate(); err != nil {
+		errs = append(errs, err)
+	}
 	return cfg, errors.Join(errs...)
 }
 
@@ -162,7 +177,7 @@ func (c Config) Validate() error {
 	if c.JavaTimeout <= 0 {
 		errs = append(errs, errors.New("java timeout must be positive"))
 	}
-	if c.MaxBodyBytes <= 0 || c.MaxFrameBytes <= 0 || c.MaxJavaFrameBytes <= 0 || c.MaxHeaderBytes <= 0 {
+	if c.MaxBodyBytes <= 0 || c.MaxFrameBytes <= 0 || c.MaxHeaderBytes <= 0 {
 		errs = append(errs, errors.New("body, frame, and header limits must be positive"))
 	}
 	if err := validateHeaderName(c.ClientIPHeader); err != nil {

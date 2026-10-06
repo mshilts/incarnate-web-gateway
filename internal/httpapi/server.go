@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -465,7 +464,7 @@ func (s *Server) playWS(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}()
 	go func() {
-		errc <- proxyJavaToBrowser(ctx, wsConn, javaReader, s.cfg.MaxJavaFrameBytes)
+		errc <- proxyJavaToBrowser(ctx, wsConn, javaReader, s.cfg.MaxFrameBytes)
 		cancel()
 	}()
 	go func() {
@@ -648,9 +647,9 @@ func isBrowserLocalFrame(data []byte) bool {
 }
 
 func proxyJavaToBrowser(ctx context.Context, wsConn *websocket.Conn, javaReader *bufio.Reader, maxFrameBytes int64) error {
-	max := maxFrameBytes
+	max := int(maxFrameBytes)
 	if max <= 0 {
-		max = config.DefaultMaxJavaFrameBytes
+		max = int(config.DefaultMaxFrameBytes)
 	}
 	for {
 		line, err := readJavaLine(javaReader, max)
@@ -687,26 +686,19 @@ func (s *Server) keepAliveBrowserWebSocket(ctx context.Context, wsConn *websocke
 	}
 }
 
-func readJavaLine(reader *bufio.Reader, max int64) ([]byte, error) {
-	var line []byte
-	for {
-		part, isPrefix, err := reader.ReadLine()
-		if err != nil {
-			return nil, err
-		}
-		if int64(len(part)) > max-int64(len(line)) {
-			return nil, errors.New("java frame too large")
-		}
-		line = append(line, part...)
-		if !isPrefix {
-			break
-		}
+func readJavaLine(reader *bufio.Reader, max int) ([]byte, error) {
+	line, isPrefix, err := reader.ReadLine()
+	if err != nil {
+		return nil, err
 	}
-	trimmed := bytes.TrimSpace(line)
-	if len(trimmed) == 0 {
+	if isPrefix || len(line) > max {
+		return nil, errors.New("java frame too large")
+	}
+	trimmed := strings.TrimSpace(string(line))
+	if trimmed == "" {
 		return nil, errors.New("java frame empty")
 	}
-	return trimmed, nil
+	return []byte(trimmed), nil
 }
 
 func (s *Server) clientIP(r *http.Request) string {

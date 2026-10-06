@@ -48,7 +48,6 @@ func testConfig() config.Config {
 		JavaTimeout:       10 * time.Millisecond,
 		MaxBodyBytes:      1024,
 		MaxFrameBytes:     1024,
-		MaxJavaFrameBytes: config.DefaultMaxJavaFrameBytes,
 		MaxHeaderBytes:    1024,
 		ClientIPHeader:    config.DefaultClientIPHeader,
 		TrustedProxyCIDRs: config.DefaultTrustedProxyCIDRs(),
